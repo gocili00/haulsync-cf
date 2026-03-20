@@ -1,0 +1,29 @@
+name = "haulsync-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# ── Local dev overrides (.dev.vars file, never committed) ──────────────────
+# Create a .dev.vars file at packages/worker/.dev.vars with:
+#   DATABASE_URL=postgresql://...
+#   SESSION_SECRET=your-dev-secret-min-32-chars
+#   GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account",...}
+
+# ── Production secrets (set via: wrangler secret put SECRET_NAME) ──────────
+# wrangler secret put DATABASE_URL
+# wrangler secret put SESSION_SECRET
+# wrangler secret put GOOGLE_APPLICATION_CREDENTIALS_JSON
+
+# ── R2 bucket (added in Phase 2) ───────────────────────────────────────────
+# [[r2_buckets]]
+# binding = "R2_BUCKET"
+# bucket_name = "haulsync-uploads"
+
+# ── KV namespace for rate limiting (P1-T14) ────────────────────────────────
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "your-kv-namespace-id"
+
+[dev]
+port = 8787
+local_protocol = "http"

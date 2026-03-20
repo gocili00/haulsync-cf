@@ -1,0 +1,6 @@
+# Copy this file to .dev.vars (never commit .dev.vars)
+# Used by `wrangler dev` for local development
+
+DATABASE_URL=postgresql://postgres:password@db.your-project.supabase.co:5432/postgres
+SESSION_SECRET=change-me-to-a-random-string-at-least-32-characters-long
+GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"your-project","private_key_id":"...","private_key":"-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n","client_email":"your-sa@your-project.iam.gserviceaccount.com","client_id":"...","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}

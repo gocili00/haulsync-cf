@@ -1,0 +1,28 @@
+{
+  "name": "haulsync",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:worker": "cd packages/worker && npx wrangler dev",
+    "dev:web": "cd packages/web && npx vite",
+    "build:web": "cd packages/web && npx vite build",
+    "deploy:worker": "cd packages/worker && npx wrangler deploy",
+    "deploy:web": "cd packages/web && npx wrangler pages deploy dist --project-name haulsync",
+    "type-check:worker": "tsc --noEmit -p packages/worker/tsconfig.json",
+    "type-check:web": "tsc --noEmit -p packages/web/tsconfig.json",
+    "db:push": "drizzle-kit push --config packages/worker/drizzle.config.ts",
+    "db:push:env": "dotenv -e packages/worker/.env -- drizzle-kit push --config packages/worker/drizzle.config.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.39.3",
+    "drizzle-zod": "0.7.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "8.0.0",
+    "drizzle-kit": "0.31.8",
+    "pg": "8.13.3",
+    "typescript": "5.6.3"
+  }
+}

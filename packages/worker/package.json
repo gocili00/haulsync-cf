@@ -1,0 +1,29 @@
+{
+  "name": "@haulsync/worker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@haulsync/shared": "*",
+    "@neondatabase/serverless": "0.10.4",
+    "bcryptjs": "3.0.3",
+    "drizzle-orm": "^0.39.3",
+    "hono": "4.7.4",
+    "jose": "5.10.0",
+    "postgres": "^3.4.8",
+    "zod": "3.24.2",
+    "zod-validation-error": "3.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20250317.0",
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "20.19.27",
+    "typescript": "5.6.3",
+    "wrangler": "3.114.4"
+  }
+}

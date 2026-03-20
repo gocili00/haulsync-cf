@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "@haulsync/shared/*": ["../../packages/shared/*"],
+      "@haulsync/shared": ["../../packages/shared/schema.ts"],
+      "drizzle-orm": ["../../node_modules/drizzle-orm"],
+      "drizzle-orm/*": ["../../node_modules/drizzle-orm/*"],
+      "@neondatabase/serverless": ["../../node_modules/@neondatabase/serverless"],
+      "@neondatabase/serverless/*": ["../../node_modules/@neondatabase/serverless/*"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "../../packages/shared/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/pdf-statement.ts"
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+*.tar.gz
+.wrangler
+.dev.vars
+packages/*/node_modules
+packages/*/dist
+packages/web/.env.production

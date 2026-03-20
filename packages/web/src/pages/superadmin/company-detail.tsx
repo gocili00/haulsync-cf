@@ -638,7 +638,7 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
             <Button
               variant="destructive"
               className="w-full"
-              disabled={dangerMutation.isPending || (needsConfirmText && (dangerConfirm !== confirmWord || !dangerReason))}
+              disabled={dangerMutation.isPending || (!!needsConfirmText && (dangerConfirm !== confirmWord || !dangerReason))}
               onClick={() => dangerMutation.mutate()}
               data-testid="button-sa-danger-confirm"
             >

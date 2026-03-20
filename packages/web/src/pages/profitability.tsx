@@ -180,6 +180,8 @@ export default function ProfitabilityPage() {
     endDate: string;
     rangeType: string;
     totalMissingRevenue: number;
+    loadsWithoutTruck?: number;
+    hasActiveCosts?: boolean;
     fleetSummary: {
       totalRevenue: string;
       totalDriverPay: string;

@@ -259,12 +259,12 @@ export default function ProfitabilityPage() {
         </Card>
       )}
 
-      {profData && profData.loadsWithoutTruck > 0 && (
+      {profData && (profData.loadsWithoutTruck ?? 0) > 0 && (
         <Card className="border-orange-500/30">
           <CardContent className="flex items-center gap-3 py-3">
             <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0" />
             <p className="text-sm text-orange-300" data-testid="text-loads-without-truck-banner">
-              <span className="font-semibold">{profData.loadsWithoutTruck}</span> load{profData.loadsWithoutTruck !== 1 ? "s" : ""} in this period have no truck assigned. Truck-related costs may be incomplete.
+              <span className="font-semibold">{profData.loadsWithoutTruck ?? 0}</span> load{(profData.loadsWithoutTruck ?? 0) !== 1 ? "s" : ""} in this period have no truck assigned. Truck-related costs may be incomplete.
             </p>
           </CardContent>
         </Card>

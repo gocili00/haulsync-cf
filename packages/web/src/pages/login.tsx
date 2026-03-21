@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Eye, EyeOff } from "lucide-react";
-import logoImg from "../assets/HaulSync1.png";
+const logoImg = new URL("../assets/HaulSync1.png", import.meta.url).href;
 
 export default function LoginPage() {
   const { login, register } = useAuth();

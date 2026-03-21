@@ -15,9 +15,20 @@ export async function onRequest(context: any) {
     redirect: "follow",
   });
 
+  // Copy headers manually to preserve multiple Set-Cookie headers
+  const headers = new Headers();
+  for (const [key, value] of response.headers.entries()) {
+    if (key.toLowerCase() === "set-cookie") continue;
+    headers.set(key, value);
+  }
+  const cookies = (response.headers as any).getSetCookie?.() ?? [];
+  for (const cookie of cookies) {
+    headers.append("Set-Cookie", cookie);
+  }
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
+    headers,
   });
 }

@@ -29,20 +29,27 @@ function st(c: Context<{ Bindings: Env }>) {
 }
 
 async function calcMiles(pickup: string, delivery: string, mapboxToken: string | undefined): Promise<number | null> {
-  if (!mapboxToken) return null;
+  if (!mapboxToken) { console.error("[calcMiles] No MAPBOX_TOKEN"); return null; }
   try {
-    const pg = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(pickup)}.json?access_token=${mapboxToken}&limit=1`);
-    const pd = await pg.json() as any;
+    const pgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(pickup)}.json?access_token=${mapboxToken}&limit=1`);
+    if (!pgRes.ok) { console.error(`[calcMiles] Pickup geocode failed: ${pgRes.status} ${await pgRes.text()}`); return null; }
+    const pd = await pgRes.json() as any;
     const pCoords = pd.features?.[0]?.center;
-    const dg = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(delivery)}.json?access_token=${mapboxToken}&limit=1`);
-    const dd = await dg.json() as any;
+    if (!pCoords) { console.error(`[calcMiles] No coords for pickup "${pickup}". Response: ${JSON.stringify(pd).slice(0, 200)}`); return null; }
+
+    const dgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(delivery)}.json?access_token=${mapboxToken}&limit=1`);
+    if (!dgRes.ok) { console.error(`[calcMiles] Delivery geocode failed: ${dgRes.status} ${await dgRes.text()}`); return null; }
+    const dd = await dgRes.json() as any;
     const dCoords = dd.features?.[0]?.center;
-    if (!pCoords || !dCoords) return null;
-    const dr = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${pCoords[0]},${pCoords[1]};${dCoords[0]},${dCoords[1]}?access_token=${mapboxToken}`);
-    const drData = await dr.json() as any;
+    if (!dCoords) { console.error(`[calcMiles] No coords for delivery "${delivery}". Response: ${JSON.stringify(dd).slice(0, 200)}`); return null; }
+
+    const drRes = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${pCoords[0]},${pCoords[1]};${dCoords[0]},${dCoords[1]}?access_token=${mapboxToken}`);
+    if (!drRes.ok) { console.error(`[calcMiles] Directions failed: ${drRes.status} ${await drRes.text()}`); return null; }
+    const drData = await drRes.json() as any;
     const dist = drData.routes?.[0]?.distance;
+    console.log(`[calcMiles] ${pickup} → ${delivery}: ${dist}m → ${dist ? Math.round(dist / 1609.34) : null} miles`);
     return dist ? Math.round(dist / 1609.34) : null;
-  } catch { return null; }
+  } catch (err: any) { console.error("[calcMiles] Exception:", err.message); return null; }
 }
 
 async function validateDriver(storage: DatabaseStorage, driverUserId: number, userCompanyId: number | null | undefined, userRole: string): Promise<boolean> {

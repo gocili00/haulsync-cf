@@ -17,6 +17,7 @@ import { createDb } from "../db";
 import { DatabaseStorage } from "../storage";
 import { authMiddleware, requireRole } from "../middleware/auth";
 import { extractAddresses } from "../address-extract";
+import { processDocument, isOcrAvailable } from "../ocr";
 
 export const loadRoutes = new Hono<{ Bindings: Env }>();
 
@@ -146,15 +147,150 @@ loadRoutes.post("/loads", authMiddleware, async (c) => {
   } catch (err: any) { return c.json({ message: err.message }, 400); }
 });
 
-// ── upload-bol stub (Phase 2) ──────────────────────────────────────────────
-loadRoutes.post("/loads/upload-bol", authMiddleware, (c) =>
-  c.json({ message: "BOL file upload implemented in Phase 2 (requires R2 bucket)" }, 501)
-);
+// ── POST /api/loads/upload-bol ─────────────────────────────────────────────
+loadRoutes.post("/loads/upload-bol", authMiddleware, async (c) => {
+  try {
+    const user = c.get("user");
+    const storage = st(c);
 
-// ── GET /api/jobs/:id — stub (real queue in Phase 2) ──────────────────────
-loadRoutes.get("/jobs/:id", authMiddleware, (c) =>
-  c.json({ id: c.req.param("id"), status: "succeeded", result: null })
-);
+    const contentType = c.req.header("content-type") || "";
+    if (!contentType.includes("multipart/form-data")) {
+      return c.json({ message: "Expected multipart/form-data" }, 400);
+    }
+
+    const formData = await c.req.formData();
+    const fileEntries = formData.getAll("bol") as File[];
+    if (!fileEntries || fileEntries.length === 0) {
+      return c.json({ message: "No file uploaded" }, 400);
+    }
+
+    const allowedTypes = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
+    for (const f of fileEntries) {
+      if (!allowedTypes.includes(f.type)) {
+        return c.json({ message: "Only PDF, JPG, and PNG files are allowed" }, 400);
+      }
+      if (f.size > 10 * 1024 * 1024) {
+        return c.json({ message: "File size must not exceed 10MB" }, 400);
+      }
+    }
+
+    const pickupCity = (formData.get("pickupCity") as string) || null;
+    const deliveryCity = (formData.get("deliveryCity") as string) || null;
+
+    // Store files to R2 and collect keys
+    const fileBuffers: { buffer: ArrayBuffer; mimeType: string; key: string }[] = [];
+    const bolFileUrls: string[] = [];
+
+    for (const file of fileEntries) {
+      const ext = file.name.split(".").pop() || "bin";
+      const key = `bol/${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`;
+      const buffer = await file.arrayBuffer();
+      await c.env.BOL_BUCKET.put(key, buffer, { httpMetadata: { contentType: file.type } });
+      fileBuffers.push({ buffer, mimeType: file.type, key });
+      bolFileUrls.push(`/api/loads/bol/${key}`);
+    }
+
+    const bolFileUrl = bolFileUrls[0];
+
+    // Create load
+    const load = await storage.createLoad({
+      driverUserId: user.userId,
+      companyId: user.companyId || null,
+      pickupAddress: pickupCity,
+      deliveryAddress: deliveryCity,
+      pickupDate: new Date().toISOString().split("T")[0],
+      status: "BOL_UPLOADED",
+      bolFileUrl,
+      createdByDriver: true,
+    } as any);
+
+    await storage.updateLoadOcr(load.id, { bolFileUrls });
+
+    await storage.createAuditLog({
+      actorId: user.userId,
+      companyId: user.companyId ?? undefined,
+      action: "BOL_UPLOAD",
+      entity: "LOAD",
+      entityId: load.id,
+    });
+
+    // Generate jobId and store initial state in KV
+    let jobId: string | null = null;
+    if (isOcrAvailable(c.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)) {
+      jobId = crypto.randomUUID();
+      await c.env.JOBS_KV.put(
+        jobId,
+        JSON.stringify({ id: jobId, status: "queued", result: null, error: null, attempts: 0, createdAt: Date.now(), updatedAt: Date.now() }),
+        { expirationTtl: 3600 }
+      );
+
+      // Run OCR in background after response is sent
+      const loadId = load.id;
+      const credJson = c.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+      const jobsKv = c.env.JOBS_KV;
+      const db = createDb(c.env);
+      const bgStorage = new DatabaseStorage(db);
+
+      c.executionCtx.waitUntil(
+        (async () => {
+          try {
+            await jobsKv.put(jobId!, JSON.stringify({ id: jobId, status: "running", result: null, error: null, attempts: 1, createdAt: Date.now(), updatedAt: Date.now() }), { expirationTtl: 3600 });
+
+            const texts: string[] = [];
+            for (const { buffer, mimeType } of fileBuffers) {
+              const rawText = await processDocument(buffer, mimeType, credJson);
+              if (rawText) texts.push(rawText);
+            }
+
+            if (texts.length > 0) {
+              const mergedText = texts.join("\n\n---DOC_PAGE---\n\n");
+              const addresses = extractAddresses(mergedText);
+              const needsManual = !addresses.deliveryAddress || addresses.confidenceDelivery < 20;
+              await bgStorage.updateLoadOcr(loadId, {
+                bolRawText: mergedText,
+                bolParsed: true,
+                extractedPickupAddress: addresses.pickupAddress,
+                extractedDeliveryAddress: addresses.deliveryAddress,
+                confidencePickup: addresses.confidencePickup.toFixed(2),
+                confidenceDelivery: addresses.confidenceDelivery.toFixed(2),
+                pickupCandidates: addresses.pickupCandidates.length > 0 ? addresses.pickupCandidates : null,
+                deliveryCandidates: addresses.deliveryCandidates.length > 0 ? addresses.deliveryCandidates : null,
+                pickupSourceLines: addresses.pickupSourceLines.length > 0 ? addresses.pickupSourceLines : null,
+                deliverySourceLines: addresses.deliverySourceLines.length > 0 ? addresses.deliverySourceLines : null,
+                needsManualDelivery: needsManual,
+                status: "OCR_DONE",
+                pickupAddress: addresses.pickupAddress || pickupCity,
+                deliveryAddress: addresses.deliveryAddress || deliveryCity,
+              });
+              console.log(`[OCR Job] Load ${loadId} processed: pickup="${addresses.pickupAddress}", delivery="${addresses.deliveryAddress}", needsManual=${needsManual}`);
+              const jobResult = { pickupAddress: addresses.pickupAddress, deliveryAddress: addresses.deliveryAddress, confidencePickup: addresses.confidencePickup, confidenceDelivery: addresses.confidenceDelivery, pickupCandidates: addresses.pickupCandidates, deliveryCandidates: addresses.deliveryCandidates, needsManual };
+              await jobsKv.put(jobId!, JSON.stringify({ id: jobId, status: "succeeded", result: jobResult, error: null, attempts: 1, createdAt: Date.now(), updatedAt: Date.now() }), { expirationTtl: 3600 });
+            } else {
+              await bgStorage.updateLoadOcr(loadId, { bolParsed: false, bolRawText: null });
+              console.log(`[OCR Job] Load ${loadId}: No text extracted from ${fileBuffers.length} file(s)`);
+              await jobsKv.put(jobId!, JSON.stringify({ id: jobId, status: "succeeded", result: { noText: true }, error: null, attempts: 1, createdAt: Date.now(), updatedAt: Date.now() }), { expirationTtl: 3600 });
+            }
+          } catch (err: any) {
+            console.error(`[OCR Job] Load ${loadId} failed:`, err.message);
+            await jobsKv.put(jobId!, JSON.stringify({ id: jobId, status: "failed", result: null, error: err.message, attempts: 1, createdAt: Date.now(), updatedAt: Date.now() }), { expirationTtl: 3600 });
+          }
+        })()
+      );
+    }
+
+    return c.json({ ...load, bolFileUrls, jobId });
+  } catch (err: any) {
+    return c.json({ message: err.message }, 400);
+  }
+});
+
+// ── GET /api/jobs/:id ──────────────────────────────────────────────────────
+loadRoutes.get("/jobs/:id", authMiddleware, async (c) => {
+  const id = c.req.param("id");
+  const raw = await c.env.JOBS_KV.get(id);
+  if (!raw) return c.json({ message: "Job not found" }, 404);
+  return c.json(JSON.parse(raw));
+});
 
 // ── GET /api/loads/broker-stats ────────────────────────────────────────────
 loadRoutes.get("/loads/broker-stats", authMiddleware, requireRole("DISPATCHER", "ADMIN", "SUPERADMIN"), async (c) => {
@@ -257,10 +393,51 @@ loadRoutes.post("/loads/:id/verify", authMiddleware, requireRole("DISPATCHER", "
   } catch (err: any) { return c.json({ message: err.message }, 400); }
 });
 
-// ── POST /api/loads/:id/calculate-miles — deferred Phase 2 ────────────────
-loadRoutes.post("/loads/:id/calculate-miles", authMiddleware, requireRole("DISPATCHER", "ADMIN", "SUPERADMIN"), (c) =>
-  c.json({ message: "Standalone miles calculation implemented in Phase 2" }, 501)
-);
+// ── POST /api/loads/:id/calculate-miles ────────────────────────────────────
+loadRoutes.post("/loads/:id/calculate-miles", authMiddleware, requireRole("DISPATCHER", "ADMIN", "SUPERADMIN"), async (c) => {
+  try {
+    const user = c.get("user");
+    const storage = st(c);
+    const id = parseInt(c.req.param("id"));
+    const load = await storage.getLoad(id);
+    if (!load) return c.json({ message: "Load not found" }, 404);
+    if (user.role !== "SUPERADMIN") {
+      const valid = await validateDriver(storage, load.driverUserId, user.companyId, user.role);
+      if (!valid) return c.json({ message: "Load not found" }, 404);
+    }
+    const body = await c.req.json();
+    const { manualMiles, pickup: reqPickup, delivery: reqDelivery } = body;
+    const pickup = reqPickup || load.verifiedPickupAddress || load.extractedPickupAddress || load.pickupAddress;
+    const delivery = reqDelivery || load.verifiedDeliveryAddress || load.extractedDeliveryAddress || load.deliveryAddress;
+
+    let miles: number | null = null;
+    if (pickup && delivery) {
+      miles = await calcMiles(pickup, delivery, c.env.MAPBOX_TOKEN);
+    }
+    if (!miles && manualMiles) {
+      miles = parseFloat(manualMiles);
+    }
+
+    if (miles) {
+      const updateData: any = { calculatedMiles: miles.toFixed(2) };
+      if (!load.adjustedMiles) updateData.finalMiles = miles.toFixed(2);
+      const updated = await storage.updateLoad(id, updateData);
+      if (load.revenueSource !== "MANUAL") {
+        const revMiles = updated!.finalMiles || updated!.adjustedMiles || updated!.calculatedMiles;
+        if (revMiles) {
+          const revenue = await calcRevenue(storage, load.companyId, revMiles);
+          if (revenue.revenueAmount) {
+            const revenueUpdated = await storage.updateLoad(id, { revenueAmount: revenue.revenueAmount, revenueSource: revenue.revenueSource, revenueRpmUsed: revenue.revenueRpmUsed, revenueLastCalculatedAt: new Date() } as any);
+            return c.json(revenueUpdated);
+          }
+        }
+      }
+      return c.json(updated);
+    } else {
+      return c.json({ message: "Could not calculate miles. Please enter miles manually.", needsManual: true }, 400);
+    }
+  } catch (err: any) { return c.json({ message: err.message }, 400); }
+});
 
 // ── POST /api/loads/:id/revenue/recalculate ────────────────────────────────
 loadRoutes.post("/loads/:id/revenue/recalculate", authMiddleware, requireRole("DISPATCHER", "ADMIN", "SUPERADMIN"), async (c) => {

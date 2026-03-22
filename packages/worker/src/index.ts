@@ -21,6 +21,7 @@ import { inviteRoutes } from "./routes/invites";
 import { companyRoutes } from "./routes/company";
 import { dashboardRoutes } from "./routes/dashboard";
 import { superadminRoutes } from "./routes/superadmin";
+import { authMiddleware } from "./middleware/auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -68,6 +69,15 @@ app.route("/api", companyRoutes);
 app.route("/api", dashboardRoutes);
 app.route("/api", superadminRoutes);
 app.route("/api", profitabilityRoutes);
+
+// ── Serve BOL files from R2 ────────────────────────────────────────────────
+app.get("/api/loads/bol/*", authMiddleware, async (c) => {
+  const key = c.req.path.replace("/api/loads/bol/", "");
+  const obj = await (c.env as any).BOL_BUCKET.get(key);
+  if (!obj) return c.json({ message: "File not found" }, 404);
+  const contentType = obj.httpMetadata?.contentType || "application/octet-stream";
+  return new Response(obj.body, { headers: { "Content-Type": contentType } });
+});
 
 // ── 404 fallback ───────────────────────────────────────────────────────────
 app.notFound((c) => c.json({ message: "Not found" }, 404));

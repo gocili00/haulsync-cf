@@ -14,15 +14,13 @@ compatibility_flags = ["nodejs_compat"]
 # wrangler secret put SESSION_SECRET
 # wrangler secret put GOOGLE_APPLICATION_CREDENTIALS_JSON
 
-# ── R2 bucket (added in Phase 2) ───────────────────────────────────────────
-# [[r2_buckets]]
-# binding = "R2_BUCKET"
-# bucket_name = "haulsync-uploads"
+[[r2_buckets]]
+binding = "BOL_BUCKET"
+bucket_name = "haulsync-bol"
 
-# ── KV namespace for rate limiting (P1-T14) ────────────────────────────────
-# [[kv_namespaces]]
-# binding = "RATE_LIMIT"
-# id = "your-kv-namespace-id"
+[[kv_namespaces]]
+binding = "JOBS_KV"
+id = "0d9d5c49db30445c919b31cdf41ceeed"
 
 [dev]
 port = 8787

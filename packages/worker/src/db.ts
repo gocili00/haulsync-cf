@@ -6,6 +6,9 @@ export type Env = {
   DATABASE_URL: string;
   SESSION_SECRET: string;
   GOOGLE_APPLICATION_CREDENTIALS_JSON: string;
+  MAPBOX_TOKEN: string;
+  BOL_BUCKET: R2Bucket;
+  JOBS_KV: KVNamespace;
 };
 
 export function createDb(env: Pick<Env, "DATABASE_URL">) {

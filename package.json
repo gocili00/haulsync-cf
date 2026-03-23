@@ -9,7 +9,7 @@
     "dev:web": "cd packages/web && npx vite",
     "build:web": "cd packages/web && npx vite build",
     "deploy:worker": "cd packages/worker && npx wrangler deploy",
-    "deploy:web": "cd packages/web && npx wrangler pages deploy dist --project-name haulsync",
+    "deploy:web": "cd packages/web && npx wrangler pages deploy dist --project-name haulsync-cf",
     "type-check:worker": "tsc --noEmit -p packages/worker/tsconfig.json",
     "type-check:web": "tsc --noEmit -p packages/web/tsconfig.json",
     "db:push": "drizzle-kit push --config packages/worker/drizzle.config.ts",

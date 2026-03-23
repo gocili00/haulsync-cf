@@ -22,6 +22,7 @@ import { DatabaseStorage } from "../storage";
 import {
   hashPassword,
   comparePassword,
+  needsRehash,
   generateAccessToken,
   createRefreshToken,
   validateRefreshToken,
@@ -166,6 +167,17 @@ authRoutes.post("/login", async (c) => {
       return c.json({ message: "Invalid email or password" }, 401);
     }
 
+    // Transparently re-hash with the current cost factor if the stored hash
+    // was created with a higher cost (e.g. cost=10 from the original Replit app).
+    // waitUntil keeps this running after the response is sent so it doesn't
+    // add latency to the login request.
+    if (needsRehash(user.passwordHash)) {
+      const newHash = await hashPassword(parsed.password);
+      c.executionCtx.waitUntil(
+        storage.updateUser(user.id, { passwordHash: newHash } as any)
+      );
+    }
+
     const remember = parsed.remember ?? false;
     const accessToken = await generateAccessToken(
       { userId: user.id, role: user.role, companyId: user.companyId },
@@ -191,6 +203,33 @@ authRoutes.post("/login", async (c) => {
   } catch (err: any) {
     return c.json({ message: err.message ?? "Login failed" }, 400);
   }
+});
+
+// ── POST /api/auth/migrate-password ────────────────────────────────────────
+// One-time migration helper: resets a cost-10 (Replit-era) password to cost-4.
+// Protected by MIGRATION_SECRET env var. Only works on cost > 4 hashes so it
+// cannot be used to hijack accounts that were already migrated.
+authRoutes.post("/migrate-password", async (c) => {
+  try {
+    const { email, migrationKey, newPassword } = await c.req.json();
+    const secret = (c.env as any).MIGRATION_SECRET;
+    if (!secret || migrationKey !== secret) {
+      return c.json({ message: "Forbidden" }, 403);
+    }
+    if (!email || !newPassword || newPassword.length < 6) {
+      return c.json({ message: "email and newPassword (min 6 chars) required" }, 400);
+    }
+    const db = createDb(c.env);
+    const storage = new DatabaseStorage(db);
+    const user = await storage.getUserByEmail(email.trim().toLowerCase());
+    if (!user) return c.json({ message: "User not found" }, 404);
+    if (!needsRehash(user.passwordHash)) {
+      return c.json({ message: "Account already uses current password format — reset via superadmin panel instead" }, 400);
+    }
+    const passwordHash = await hashPassword(newPassword);
+    await storage.updateUser(user.id, { passwordHash } as any);
+    return c.json({ message: `Password reset for ${email}` });
+  } catch (err: any) { return c.json({ message: err.message }, 400); }
 });
 
 // ── GET /api/auth/me ───────────────────────────────────────────────────────

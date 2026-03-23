@@ -31,19 +31,22 @@ function st(c: Context<{ Bindings: Env }>) {
 async function calcMiles(pickup: string, delivery: string, mapboxToken: string | undefined): Promise<number | null> {
   if (!mapboxToken) { console.error("[calcMiles] No MAPBOX_TOKEN"); return null; }
   try {
-    const pgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(pickup)}.json?access_token=${mapboxToken}&limit=1`);
+    // limit=1 + types=place,postcode,address: smallest possible response (only need center coords)
+    const pgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(pickup)}.json?access_token=${mapboxToken}&limit=1&types=place,postcode,address`);
     if (!pgRes.ok) { console.error(`[calcMiles] Pickup geocode failed: ${pgRes.status} ${await pgRes.text()}`); return null; }
     const pd = await pgRes.json() as any;
     const pCoords = pd.features?.[0]?.center;
     if (!pCoords) { console.error(`[calcMiles] No coords for pickup "${pickup}". Response: ${JSON.stringify(pd).slice(0, 200)}`); return null; }
 
-    const dgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(delivery)}.json?access_token=${mapboxToken}&limit=1`);
+    const dgRes = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(delivery)}.json?access_token=${mapboxToken}&limit=1&types=place,postcode,address`);
     if (!dgRes.ok) { console.error(`[calcMiles] Delivery geocode failed: ${dgRes.status} ${await dgRes.text()}`); return null; }
     const dd = await dgRes.json() as any;
     const dCoords = dd.features?.[0]?.center;
     if (!dCoords) { console.error(`[calcMiles] No coords for delivery "${delivery}". Response: ${JSON.stringify(dd).slice(0, 200)}`); return null; }
 
-    const drRes = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${pCoords[0]},${pCoords[1]};${dCoords[0]},${dCoords[1]}?access_token=${mapboxToken}`);
+    // overview=false + alternatives=false: skip route geometry so the response is tiny
+    // (a 1000-mile route geometry can be 200KB+ which blows the CF Worker memory/CPU limit)
+    const drRes = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${pCoords[0]},${pCoords[1]};${dCoords[0]},${dCoords[1]}?access_token=${mapboxToken}&overview=false&alternatives=false`);
     if (!drRes.ok) { console.error(`[calcMiles] Directions failed: ${drRes.status} ${await drRes.text()}`); return null; }
     const drData = await drRes.json() as any;
     const dist = drData.routes?.[0]?.distance;

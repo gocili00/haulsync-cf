@@ -158,23 +158,31 @@ export class DatabaseStorage implements IStorage {
 
   private async _enrichDriversWithLastTruck(driverIds: number[], companyId?: number): Promise<Map<number, string | null>> {
     if (driverIds.length === 0) return new Map();
-    const companyFilter = companyId ? sql`AND l.company_id = ${companyId}` : sql``;
-    const rows = await this.db.execute(sql`
-      SELECT DISTINCT ON (l.driver_user_id)
-        l.driver_user_id,
-        t.truck_number
-      FROM loads l
-      JOIN trucks t ON t.id = l.truck_id
-      WHERE l.driver_user_id = ANY(${sql.raw(`ARRAY[${driverIds.join(",")}]`)})
-        AND l.truck_id IS NOT NULL
-        AND l.is_deleted = false
-        AND l.is_voided = false
-        ${companyFilter}
-      ORDER BY l.driver_user_id, l.pickup_date DESC, l.id DESC
-    `);
+    // Fetch the most recent truck per driver using a standard drizzle query,
+    // then pick the first (latest) row per driver in JS.
+    const conditions: any[] = [
+      inArray(loads.driverUserId, driverIds),
+      eq(loads.isDeleted, false),
+      eq(loads.isVoided, false),
+      sql`${loads.truckId} IS NOT NULL`,
+    ];
+    if (companyId) conditions.push(eq(loads.companyId, companyId));
+    const rows = await this.db
+      .select({ driverUserId: loads.driverUserId, truckId: loads.truckId, pickupDate: loads.pickupDate })
+      .from(loads)
+      .where(and(...conditions))
+      .orderBy(desc(loads.pickupDate), desc(loads.id));
+    // Collect truck IDs, then batch-fetch truck numbers
+    const truckIds = [...new Set(rows.map(r => r.truckId).filter(Boolean) as number[])];
+    const truckRows = truckIds.length > 0
+      ? await this.db.select({ id: trucks.id, truckNumber: trucks.truckNumber }).from(trucks).where(inArray(trucks.id, truckIds))
+      : [];
+    const truckMap = new Map(truckRows.map(t => [t.id, t.truckNumber]));
     const m = new Map<number, string | null>();
-    for (const r of rows as any[]) {
-      m.set(Number(r.driver_user_id), r.truck_number as string);
+    for (const r of rows) {
+      if (!m.has(r.driverUserId) && r.truckId) {
+        m.set(r.driverUserId, truckMap.get(r.truckId) ?? null);
+      }
     }
     return m;
   }
@@ -187,17 +195,21 @@ export class DatabaseStorage implements IStorage {
       query = await this.db.select().from(users).where(and(eq(users.role, "DRIVER"), sql`${users.deletedAt} IS NULL`)).orderBy(users.id);
     }
     const driverIds = query.map((u) => u.id);
-    const lastTruckMap = await this._enrichDriversWithLastTruck(driverIds, companyId);
-    const results = [];
-    for (const u of query) {
-      const profile = await this.getDriverProfile(u.id);
-      let assignedDispatcherName: string | undefined;
-      if (profile?.assignedDispatcherId) {
-        const dispatcher = await this.getUser(profile.assignedDispatcherId);
-        if (dispatcher) assignedDispatcherName = `${dispatcher.firstName} ${dispatcher.lastName}`;
-      }
-      results.push({ ...u, profile, assignedDispatcherName, lastTruckNumber: lastTruckMap.get(u.id) ?? null, passwordHash: undefined });
-    }
+    const [lastTruckMap, profileRows] = await Promise.all([
+      this._enrichDriversWithLastTruck(driverIds, companyId),
+      driverIds.length > 0 ? this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, driverIds)) : Promise.resolve([]),
+    ]);
+    const profileMap = new Map(profileRows.map(p => [p.userId, p]));
+    const dispatcherIds = [...new Set(profileRows.map(p => p.assignedDispatcherId).filter(Boolean) as number[])];
+    const dispatcherRows = dispatcherIds.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, dispatcherIds))
+      : [];
+    const dispatcherMap = new Map(dispatcherRows.map(u => [u.id, `${u.firstName} ${u.lastName}`]));
+    const results = query.map(u => {
+      const profile = profileMap.get(u.id) ?? null;
+      const assignedDispatcherName = profile?.assignedDispatcherId ? dispatcherMap.get(profile.assignedDispatcherId) : undefined;
+      return { ...u, profile, assignedDispatcherName, lastTruckNumber: lastTruckMap.get(u.id) ?? null, passwordHash: undefined };
+    });
     return results;
   }
 
@@ -216,16 +228,22 @@ export class DatabaseStorage implements IStorage {
     const rows = await this.db.select().from(users).where(whereClause).orderBy(users.id).limit(options.limit).offset(options.offset);
     const driverIds = rows.map((u) => u.id);
     const lastTruckMap = await this._enrichDriversWithLastTruck(driverIds, options.companyId);
-    const items = [];
-    for (const u of rows) {
-      const profile = await this.getDriverProfile(u.id);
-      let assignedDispatcherName: string | undefined;
-      if (profile?.assignedDispatcherId) {
-        const dispatcher = await this.getUser(profile.assignedDispatcherId);
-        if (dispatcher) assignedDispatcherName = `${dispatcher.firstName} ${dispatcher.lastName}`;
-      }
-      items.push({ ...u, profile, assignedDispatcherName, lastTruckNumber: lastTruckMap.get(u.id) ?? null, passwordHash: undefined });
-    }
+    const [profileRows] = await Promise.all([
+      driverIds.length > 0 ? this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, driverIds)) : [],
+    ]);
+    const profileMap = new Map(profileRows.map(p => [p.userId, p]));
+    const dispatcherIdSet = [...new Set(profileRows.map(p => p.assignedDispatcherId).filter((id): id is number => !!id))];
+    const dispatcherRows = dispatcherIdSet.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, dispatcherIdSet))
+      : [];
+    const dispatcherMap = new Map(dispatcherRows.map(u => [u.id, u]));
+
+    const items = rows.map(u => {
+      const profile = profileMap.get(u.id);
+      const dispatcher = profile?.assignedDispatcherId ? dispatcherMap.get(profile.assignedDispatcherId) : undefined;
+      const assignedDispatcherName = dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined;
+      return { ...u, profile, assignedDispatcherName, lastTruckNumber: lastTruckMap.get(u.id) ?? null, passwordHash: undefined };
+    });
     return { items, total: Number(total) };
   }
 
@@ -285,22 +303,29 @@ export class DatabaseStorage implements IStorage {
       filteredByDispatcher = query.filter(l => assignedDriverIds.has(l.driverUserId));
     }
 
-    const results = [];
-    for (const l of filteredByDispatcher) {
-      const driver = await this.getUser(l.driverUserId);
-      const driverProfile = driver ? await this.getDriverProfile(driver.id) : null;
-      let assignedDispatcherName: string | undefined;
-      if (driverProfile?.assignedDispatcherId) {
-        const disp = await this.getUser(driverProfile.assignedDispatcherId);
-        if (disp) assignedDispatcherName = `${disp.firstName} ${disp.lastName}`;
-      }
-      results.push({
+    const loadDriverIds = [...new Set(filteredByDispatcher.map(l => l.driverUserId).filter(Boolean) as number[])];
+    const [loadDriverRows, loadProfileRows] = loadDriverIds.length > 0 ? await Promise.all([
+      this.db.select().from(users).where(inArray(users.id, loadDriverIds)),
+      this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, loadDriverIds)),
+    ]) : [[], []];
+    const loadDriverMap = new Map(loadDriverRows.map(u => [u.id, u]));
+    const loadProfileMap = new Map(loadProfileRows.map(p => [p.userId, p]));
+    const loadDispatcherIds = [...new Set(loadProfileRows.map(p => p.assignedDispatcherId).filter(Boolean) as number[])];
+    const loadDispatcherRows = loadDispatcherIds.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, loadDispatcherIds))
+      : [];
+    const loadDispatcherMap = new Map(loadDispatcherRows.map(u => [u.id, u]));
+    const results = filteredByDispatcher.map(l => {
+      const driver = loadDriverMap.get(l.driverUserId);
+      const profile = loadProfileMap.get(l.driverUserId);
+      const disp = profile?.assignedDispatcherId ? loadDispatcherMap.get(profile.assignedDispatcherId) : undefined;
+      return {
         ...l,
         driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
-        assignedDispatcherName,
-        assignedDispatcherId: driverProfile?.assignedDispatcherId,
-      });
-    }
+        assignedDispatcherName: disp ? `${disp.firstName} ${disp.lastName}` : undefined,
+        assignedDispatcherId: profile?.assignedDispatcherId,
+      };
+    });
     return results;
   }
 
@@ -365,18 +390,32 @@ export class DatabaseStorage implements IStorage {
       for (const t of truckRows) truckMap.set(t.id, t.truckNumber);
     }
 
-    const items = [];
-    for (const l of rows) {
-      const driver = await this.getUser(l.driverUserId);
-      const driverProfile = driver ? await this.getDriverProfile(driver.id) : null;
-      let assignedDispatcherName: string | undefined;
-      if (driverProfile?.assignedDispatcherId) {
-        const disp = await this.getUser(driverProfile.assignedDispatcherId);
-        if (disp) assignedDispatcherName = `${disp.firstName} ${disp.lastName}`;
-      }
-      const truckNumber = l.truckId ? (truckMap.get(l.truckId) ?? null) : null;
-      items.push({ ...l, driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined, assignedDispatcherName, assignedDispatcherId: driverProfile?.assignedDispatcherId, truckNumber });
-    }
+    // Batch-fetch all drivers, profiles, and dispatchers in 3 queries instead of N×3
+    const driverIdSet = [...new Set(rows.map(l => l.driverUserId))];
+    const [driverRows, profileRows] = await Promise.all([
+      driverIdSet.length > 0 ? this.db.select().from(users).where(inArray(users.id, driverIdSet)) : [],
+      driverIdSet.length > 0 ? this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, driverIdSet)) : [],
+    ]);
+    const driverMap = new Map(driverRows.map(u => [u.id, u]));
+    const profileMap = new Map(profileRows.map(p => [p.userId, p]));
+    const dispatcherIdSet = [...new Set(profileRows.map(p => p.assignedDispatcherId).filter((id): id is number => !!id))];
+    const dispatcherRows = dispatcherIdSet.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, dispatcherIdSet))
+      : [];
+    const dispatcherMap = new Map(dispatcherRows.map(u => [u.id, u]));
+
+    const items = rows.map(l => {
+      const driver = driverMap.get(l.driverUserId);
+      const profile = profileMap.get(l.driverUserId);
+      const dispatcher = profile?.assignedDispatcherId ? dispatcherMap.get(profile.assignedDispatcherId) : undefined;
+      return {
+        ...l,
+        driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
+        assignedDispatcherName: dispatcher ? `${dispatcher.firstName} ${dispatcher.lastName}` : undefined,
+        assignedDispatcherId: profile?.assignedDispatcherId,
+        truckNumber: l.truckId ? (truckMap.get(l.truckId) ?? null) : null,
+      };
+    });
     return { items, total: Number(total) };
   }
 
@@ -406,14 +445,15 @@ export class DatabaseStorage implements IStorage {
     } else {
       query = await this.db.select().from(payItems).orderBy(desc(payItems.createdAt));
     }
-    const results = [];
-    for (const pi of query) {
-      const driver = await this.getUser(pi.driverUserId);
-      results.push({
-        ...pi,
-        driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
-      });
-    }
+    const piDriverIds = [...new Set(query.map(pi => pi.driverUserId).filter(Boolean) as number[])];
+    const piDriverRows = piDriverIds.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, piDriverIds))
+      : [];
+    const piDriverMap = new Map(piDriverRows.map(u => [u.id, u]));
+    const results = query.map(pi => {
+      const driver = piDriverMap.get(pi.driverUserId);
+      return { ...pi, driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined };
+    });
     return results;
   }
 
@@ -445,11 +485,15 @@ export class DatabaseStorage implements IStorage {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
     const [{ value: total }] = await this.db.select({ value: drizzleCount() }).from(payItems).where(whereClause);
     const rows = await this.db.select().from(payItems).where(whereClause).orderBy(desc(payItems.createdAt)).limit(options.limit).offset(options.offset);
-    const items = [];
-    for (const pi of rows) {
-      const driver = await this.getUser(pi.driverUserId);
-      items.push({ ...pi, driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined });
-    }
+    const rowDriverIds = [...new Set(rows.map(pi => pi.driverUserId).filter(Boolean) as number[])];
+    const rowDriverRows = rowDriverIds.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, rowDriverIds))
+      : [];
+    const rowDriverMap = new Map(rowDriverRows.map(u => [u.id, u]));
+    const items = rows.map(pi => {
+      const driver = rowDriverMap.get(pi.driverUserId);
+      return { ...pi, driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined };
+    });
     return { items, total: Number(total) };
   }
 
@@ -483,10 +527,13 @@ export class DatabaseStorage implements IStorage {
       .from(payItems).where(whereClause);
     const totalDrivers = distinctDrivers.length;
 
+    const distinctDriverUserIds = distinctDrivers.map(d => d.driverUserId).filter(Boolean) as number[];
+    const driverUserRows = distinctDriverUserIds.length > 0
+      ? await this.db.select().from(users).where(inArray(users.id, distinctDriverUserIds))
+      : [];
     const driverNameMap: Record<number, string> = {};
-    for (const dd of distinctDrivers) {
-      const u = await this.getUser(dd.driverUserId);
-      driverNameMap[dd.driverUserId] = u ? `${u.firstName} ${u.lastName}` : "Unknown";
+    for (const u of driverUserRows) {
+      driverNameMap[u.id] = `${u.firstName} ${u.lastName}`;
     }
     const sortedDriverIds = distinctDrivers
       .map(d => d.driverUserId)
@@ -531,16 +578,22 @@ export class DatabaseStorage implements IStorage {
     } else {
       query = await this.db.select().from(payrollWeeks).orderBy(desc(payrollWeeks.createdAt));
     }
-    const results = [];
-    for (const pw of query) {
-      const driver = await this.getUser(pw.driverUserId);
-      const profile = driver ? await this.getDriverProfile(driver.id) : null;
-      results.push({
+    const driverUserIds = [...new Set(query.map(pw => pw.driverUserId).filter(Boolean) as number[])];
+    const [driverRows, profileRows] = driverUserIds.length > 0 ? await Promise.all([
+      this.db.select().from(users).where(inArray(users.id, driverUserIds)),
+      this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, driverUserIds)),
+    ]) : [[], []];
+    const driverMap = new Map(driverRows.map(u => [u.id, u]));
+    const profileMap = new Map(profileRows.map(p => [p.userId, p]));
+    const results = query.map(pw => {
+      const driver = driverMap.get(pw.driverUserId);
+      const profile = profileMap.get(pw.driverUserId);
+      return {
         ...pw,
         driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
         employmentType: profile?.employmentType || "W2_COMPANY_DRIVER",
-      });
-    }
+      };
+    });
     return results;
   }
 
@@ -607,16 +660,23 @@ export class DatabaseStorage implements IStorage {
       .limit(options.limit)
       .offset(options.offset);
 
-    const items = [];
-    for (const pw of rows) {
-      const driver = await this.getUser(pw.driverUserId);
-      const profile = driver ? await this.getDriverProfile(driver.id) : null;
-      items.push({
+    const pwDriverIds = [...new Set(rows.map(pw => pw.driverUserId))];
+    const [pwDriverRows, pwProfileRows] = await Promise.all([
+      pwDriverIds.length > 0 ? this.db.select().from(users).where(inArray(users.id, pwDriverIds)) : [],
+      pwDriverIds.length > 0 ? this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, pwDriverIds)) : [],
+    ]);
+    const pwDriverMap = new Map(pwDriverRows.map(u => [u.id, u]));
+    const pwProfileMap = new Map(pwProfileRows.map(p => [p.userId, p]));
+
+    const items = rows.map(pw => {
+      const driver = pwDriverMap.get(pw.driverUserId);
+      const profile = pwProfileMap.get(pw.driverUserId);
+      return {
         ...pw,
         driverName: driver ? `${driver.firstName} ${driver.lastName}` : undefined,
         employmentType: profile?.employmentType || "W2_COMPANY_DRIVER",
-      });
-    }
+      };
+    });
 
     return { items, total: Number(total), driverCount: Number(driverCount) };
   }
@@ -657,11 +717,19 @@ export class DatabaseStorage implements IStorage {
     } else {
       query = await this.db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit).offset(offset);
     }
+    const actorIds = [...new Set(query.map(l => l.actorId).filter(Boolean) as number[])];
+    const auditCompanyIds = [...new Set(query.map(l => l.companyId).filter(Boolean) as number[])];
+    const [actorRows, auditCompanyRows] = await Promise.all([
+      actorIds.length > 0 ? this.db.select().from(users).where(inArray(users.id, actorIds)) : Promise.resolve([]),
+      auditCompanyIds.length > 0 ? this.db.select().from(companies).where(inArray(companies.id, auditCompanyIds)) : Promise.resolve([]),
+    ]);
+    const actorMap = new Map(actorRows.map(u => [u.id, u]));
+    const auditCompanyMap = new Map(auditCompanyRows.map(co => [co.id, co]));
     const results = [];
     for (const log of query) {
-      const actor = log.actorId ? await this.getUser(log.actorId) : null;
+      const actor = log.actorId ? actorMap.get(log.actorId) : undefined;
       if (filters?.excludeSuperadmin && actor?.role === "SUPERADMIN") continue;
-      const company = log.companyId ? await this.getCompany(log.companyId) : null;
+      const company = log.companyId ? auditCompanyMap.get(log.companyId) : undefined;
       results.push({
         ...log,
         actorName: actor ? `${actor.firstName} ${actor.lastName}` : undefined,
@@ -721,41 +789,37 @@ export class DatabaseStorage implements IStorage {
     const weekStartStr = monday.toISOString().split("T")[0];
     const weekEndStr = sunday.toISOString().split("T")[0];
 
-    let allLoads: Load[];
-    let allPayItems: PayItem[];
+    // Scope conditions
+    const loadScope = role === "DRIVER"
+      ? and(eq(loads.driverUserId, userId), eq(loads.isDeleted, false), eq(loads.isVoided, false))
+      : companyId
+        ? and(eq(loads.companyId, companyId), eq(loads.isDeleted, false), eq(loads.isVoided, false))
+        : and(eq(loads.isDeleted, false), eq(loads.isVoided, false));
+    const payScope = role === "DRIVER"
+      ? eq(payItems.driverUserId, userId)
+      : companyId ? eq(payItems.companyId, companyId) : undefined;
 
-    if (role === "DRIVER") {
-      allLoads = await this.db.select().from(loads).where(and(eq(loads.driverUserId, userId), eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-      allPayItems = await this.db.select().from(payItems).where(eq(payItems.driverUserId, userId));
-    } else if (companyId) {
-      allLoads = await this.db.select().from(loads).where(and(eq(loads.companyId, companyId), eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-      allPayItems = await this.db.select().from(payItems).where(eq(payItems.companyId, companyId));
-    } else {
-      allLoads = await this.db.select().from(loads).where(and(eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-      allPayItems = await this.db.select().from(payItems);
-    }
+    // Run all 5 aggregation queries in parallel — no full-table fetches
+    const [weekMilesRows, pendingLoadsRows, pendingApprovalsRows, pendingPayRows, weekPayrollRows] = await Promise.all([
+      this.db.select({ miles: sql<string>`COALESCE(SUM(CAST(COALESCE(${loads.finalMiles}, ${loads.calculatedMiles}, '0') AS NUMERIC)), 0)` })
+        .from(loads).where(and(loadScope, gte(loads.pickupDate, weekStartStr), lte(loads.pickupDate, weekEndStr))),
+      this.db.select({ value: drizzleCount() }).from(loads)
+        .where(and(loadScope, inArray(loads.status, ["DRAFT", "SUBMITTED", "BOL_UPLOADED", "OCR_DONE"]))),
+      this.db.select({ value: drizzleCount() }).from(loads)
+        .where(and(loadScope, inArray(loads.status, ["SUBMITTED", "VERIFIED", "BOL_UPLOADED", "OCR_DONE"]))),
+      this.db.select({ value: drizzleCount() }).from(payItems)
+        .where(payScope ? and(payScope, eq(payItems.status, "SUBMITTED")) : eq(payItems.status, "SUBMITTED")),
+      role === "DRIVER"
+        ? this.db.select().from(payrollWeeks).where(and(eq(payrollWeeks.driverUserId, userId), eq(payrollWeeks.weekStart, weekStartStr)))
+        : companyId
+          ? this.db.select().from(payrollWeeks).where(and(eq(payrollWeeks.companyId, companyId), eq(payrollWeeks.weekStart, weekStartStr)))
+          : this.db.select().from(payrollWeeks).where(eq(payrollWeeks.weekStart, weekStartStr)),
+    ]);
 
-    const weekLoads = allLoads.filter(l => l.pickupDate && l.pickupDate >= weekStartStr && l.pickupDate <= weekEndStr);
-    const weekMiles = weekLoads.reduce((sum, l) => sum + Number(l.finalMiles || l.calculatedMiles || 0), 0);
-
-    const pendingLoads = allLoads.filter(l => l.status === "DRAFT" || l.status === "SUBMITTED" || l.status === "BOL_UPLOADED" || l.status === "OCR_DONE").length;
-    const pendingApprovals = allLoads.filter(l => l.status === "SUBMITTED" || l.status === "VERIFIED" || l.status === "BOL_UPLOADED" || l.status === "OCR_DONE").length +
-      allPayItems.filter(pi => pi.status === "SUBMITTED").length;
-
-    let weekPayrolls;
-    if (role === "DRIVER") {
-      weekPayrolls = await this.db.select().from(payrollWeeks).where(
-        and(eq(payrollWeeks.driverUserId, userId), eq(payrollWeeks.weekStart, weekStartStr))
-      );
-    } else if (companyId) {
-      weekPayrolls = await this.db.select().from(payrollWeeks).where(
-        and(eq(payrollWeeks.companyId, companyId), eq(payrollWeeks.weekStart, weekStartStr))
-      );
-    } else {
-      weekPayrolls = await this.db.select().from(payrollWeeks).where(eq(payrollWeeks.weekStart, weekStartStr));
-    }
-
-    const weekPay = weekPayrolls.reduce((sum, pw) => sum + Number(pw.netPayTotal || 0), 0);
+    const weekMiles = Number(weekMilesRows[0]?.miles ?? 0);
+    const pendingLoads = Number(pendingLoadsRows[0]?.value ?? 0);
+    const pendingApprovals = Number(pendingApprovalsRows[0]?.value ?? 0) + Number(pendingPayRows[0]?.value ?? 0);
+    const weekPay = weekPayrollRows.reduce((sum, pw) => sum + Number(pw.netPayTotal || 0), 0);
 
     return { weekMiles: Math.round(weekMiles), weekPay, pendingLoads, pendingApprovals };
   }
@@ -763,21 +827,22 @@ export class DatabaseStorage implements IStorage {
   async getAdminStats(companyId?: number): Promise<any> {
     let allUsers, activeDrivers, allLoads, allPayroll;
     if (companyId) {
-      allUsers = await this.db.select().from(users).where(eq(users.companyId, companyId));
-      const companyDrivers = allUsers.filter(u => u.role === "DRIVER");
-      const profiles = [];
-      for (const d of companyDrivers) {
-        const p = await this.getDriverProfile(d.id);
-        if (p && p.status === "ACTIVE") profiles.push(p);
-      }
-      activeDrivers = profiles;
-      allLoads = await this.db.select().from(loads).where(and(eq(loads.companyId, companyId), eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-      allPayroll = await this.db.select().from(payrollWeeks).where(eq(payrollWeeks.companyId, companyId));
+      [allUsers, allLoads, allPayroll] = await Promise.all([
+        this.db.select().from(users).where(eq(users.companyId, companyId)),
+        this.db.select().from(loads).where(and(eq(loads.companyId, companyId), eq(loads.isDeleted, false), eq(loads.isVoided, false))),
+        this.db.select().from(payrollWeeks).where(eq(payrollWeeks.companyId, companyId)),
+      ]);
+      const driverIds = allUsers.filter(u => u.role === "DRIVER").map(u => u.id);
+      activeDrivers = driverIds.length > 0
+        ? await this.db.select().from(driverProfiles).where(and(inArray(driverProfiles.userId, driverIds), eq(driverProfiles.status, "ACTIVE")))
+        : [];
     } else {
-      allUsers = await this.db.select().from(users);
-      activeDrivers = await this.db.select().from(driverProfiles).where(eq(driverProfiles.status, "ACTIVE"));
-      allLoads = await this.db.select().from(loads).where(and(eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-      allPayroll = await this.db.select().from(payrollWeeks);
+      [allUsers, activeDrivers, allLoads, allPayroll] = await Promise.all([
+        this.db.select().from(users),
+        this.db.select().from(driverProfiles).where(eq(driverProfiles.status, "ACTIVE")),
+        this.db.select().from(loads).where(and(eq(loads.isDeleted, false), eq(loads.isVoided, false))),
+        this.db.select().from(payrollWeeks),
+      ]);
     }
     const totalPayroll = allPayroll.reduce((sum, pw) => sum + Number(pw.netPayTotal || 0), 0);
 
@@ -852,10 +917,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSuperAdminStats(): Promise<any> {
-    const allCompanies = await this.db.select().from(companies);
-    const allUsers = await this.db.select().from(users);
-    const allLoads = await this.db.select().from(loads).where(and(eq(loads.isDeleted, false), eq(loads.isVoided, false)));
-    const allPayroll = await this.db.select().from(payrollWeeks);
+    const [allCompanies, allUsers, allLoads, allPayroll] = await Promise.all([
+      this.db.select().from(companies),
+      this.db.select().from(users),
+      this.db.select().from(loads).where(and(eq(loads.isDeleted, false), eq(loads.isVoided, false))),
+      this.db.select().from(payrollWeeks),
+    ]);
     const totalPayroll = allPayroll.reduce((sum, pw) => sum + Number(pw.netPayTotal || 0), 0);
 
     const thirtyDaysAgo = new Date();
@@ -907,11 +974,12 @@ export class DatabaseStorage implements IStorage {
     const whereClause = and(...conditions);
     const [{ value: total }] = await this.db.select({ value: drizzleCount() }).from(users).where(whereClause);
     const rows = await this.db.select().from(users).where(whereClause).orderBy(users.id).limit(options.limit).offset(options.offset);
-    const items = [];
-    for (const u of rows) {
-      const profile = u.role === "DRIVER" ? await this.getDriverProfile(u.id) : null;
-      items.push({ ...u, passwordHash: undefined, profile });
-    }
+    const driverIds = rows.filter(u => u.role === "DRIVER").map(u => u.id);
+    const profileRows = driverIds.length > 0
+      ? await this.db.select().from(driverProfiles).where(inArray(driverProfiles.userId, driverIds))
+      : [];
+    const profileMap = new Map(profileRows.map(p => [p.userId, p]));
+    const items = rows.map(u => ({ ...u, passwordHash: undefined, profile: u.role === "DRIVER" ? (profileMap.get(u.id) ?? null) : null }));
     return { items, total: Number(total) };
   }
 
@@ -1088,7 +1156,7 @@ export class DatabaseStorage implements IStorage {
         AND u.role = 'DRIVER'
       ORDER BY u.first_name, u.last_name
     `);
-    return result.rows;
+    return result as any[];
   }
 
   async getCompanyCostItems(companyId: number): Promise<CompanyCostItem[]> {
@@ -1136,7 +1204,7 @@ export class DatabaseStorage implements IStorage {
   async deleteCompanyCostItem(id: number, companyId: number): Promise<boolean> {
     const result = await this.db.delete(companyCostItems)
       .where(and(eq(companyCostItems.id, id), eq(companyCostItems.companyId, companyId)));
-    return (result.rowCount ?? 0) > 0;
+    return ((result as any).count ?? 0) > 0;
   }
 
   async getEnabledCompanyCostItems(companyId: number): Promise<CompanyCostItem[]> {
@@ -1173,7 +1241,7 @@ export class DatabaseStorage implements IStorage {
   async deleteTruck(id: number, companyId: number): Promise<boolean> {
     const result = await this.db.delete(trucks)
       .where(and(eq(trucks.id, id), eq(trucks.companyId, companyId)));
-    return (result.rowCount ?? 0) > 0;
+    return ((result as any).count ?? 0) > 0;
   }
 
   async getDispatcherTrucks(companyId: number, dispatcherUserId?: number): Promise<DispatcherTruck[]> {
@@ -1194,7 +1262,7 @@ export class DatabaseStorage implements IStorage {
   async removeDispatcherTruck(id: number, companyId: number): Promise<boolean> {
     const result = await this.db.delete(dispatcherTrucks)
       .where(and(eq(dispatcherTrucks.id, id), eq(dispatcherTrucks.companyId, companyId)));
-    return (result.rowCount ?? 0) > 0;
+    return ((result as any).count ?? 0) > 0;
   }
 
   async getTrucksForDispatcher(companyId: number, dispatcherUserId: number): Promise<Truck[]> {

@@ -17,8 +17,10 @@ function st(c: Context<{ Bindings: Env }>) { return new DatabaseStorage(createDb
 companyRoutes.get("/companies", authMiddleware, requireRole("SUPERADMIN"), async (c) => {
   const storage = st(c);
   const all = await storage.getAllCompanies();
-  const results = [];
-  for (const co of all) { const users = await storage.getCompanyUsers(co.id); results.push({ ...co, userCount: users.length }); }
+  const results = await Promise.all(all.map(async (co) => {
+    const coUsers = await storage.getCompanyUsers(co.id);
+    return { ...co, userCount: coUsers.length };
+  }));
   return c.json(results);
 });
 

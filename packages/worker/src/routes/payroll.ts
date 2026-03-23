@@ -1,7 +1,6 @@
 /**
- * routes/payroll.ts — Payroll routes (T9 — fully implemented, no PDF)
+ * routes/payroll.ts — Payroll routes
  * Replaces: server/routes.ts lines 1680–1832
- * PDF endpoint returns 501 until Phase 2 (R2 delivery).
  */
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -9,6 +8,7 @@ import type { Env } from "../db";
 import { createDb } from "../db";
 import { DatabaseStorage } from "../storage";
 import { authMiddleware, requireRole } from "../middleware/auth";
+import { generateStatementPdf } from "../lib/pdf-statement";
 
 export const payrollRoutes = new Hono<{ Bindings: Env }>();
 
@@ -117,7 +117,53 @@ payrollRoutes.patch("/payroll/:id/status", authMiddleware, requireRole("DISPATCH
   } catch (err: any) { return c.json({ message: err.message }, 400); }
 });
 
-// GET /api/payroll/weeks/:id/statement.pdf — Phase 2 stub
-payrollRoutes.get("/payroll/weeks/:id/statement.pdf", authMiddleware, (c) =>
-  c.json({ message: "PDF statement generation available after Phase 2 deployment (requires R2 bucket)", weekId: c.req.param("id") }, 501)
-);
+// GET /api/payroll/weeks/:id/statement.pdf
+payrollRoutes.get("/payroll/weeks/:id/statement.pdf", authMiddleware, async (c) => {
+  try {
+    const user = c.get("user");
+    const storage = st(c);
+    const id = parseInt(c.req.param("id"));
+
+    const week = await storage.getPayrollWeek(id);
+    if (!week) return c.json({ message: "Payroll week not found" }, 404);
+
+    if (user.role !== "SUPERADMIN") {
+      const valid = await validateDriver(storage, week.driverUserId, user.companyId, user.role);
+      if (!valid) return c.json({ message: "Payroll week not found" }, 404);
+    }
+
+    const [driver, profile, company] = await Promise.all([
+      storage.getUser(week.driverUserId),
+      storage.getDriverProfile(week.driverUserId),
+      week.companyId ? storage.getCompany(week.companyId) : null,
+    ]);
+
+    const companyId = week.companyId ?? 0;
+    const [loads, payItems] = await Promise.all([
+      storage.getLoadsForDriverWeek(week.driverUserId, companyId, week.weekStart, week.weekEnd),
+      storage.getPayItemsForDriverWeek(week.driverUserId, companyId, week.weekStart, week.weekEnd),
+    ]);
+
+    const driverName = driver
+      ? [driver.firstName, driver.lastName].filter(Boolean).join(" ") || driver.email
+      : "Unknown Driver";
+
+    const pdfBytes = await generateStatementPdf({
+      payrollWeek: week,
+      companyName: company?.name ?? "HaulSync",
+      driverName,
+      employmentType: profile?.employmentType ?? "W2_COMPANY_DRIVER",
+      loads,
+      payItems,
+    });
+
+    return new Response(pdfBytes as unknown as BodyInit, {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="statement-week-${week.weekStart}.pdf"`,
+      },
+    });
+  } catch (err: any) {
+    return c.json({ message: err.message }, 500);
+  }
+});

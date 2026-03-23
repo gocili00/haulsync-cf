@@ -9,8 +9,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { useLocation } from "wouter";
-import { Search, Power, PowerOff, Shield, Radio, Truck, Eye, UserCog } from "lucide-react";
+import { Search, Power, PowerOff, Shield, Radio, Truck, Eye, UserCog, KeyRound } from "lucide-react";
 
 export default function SuperadminUsers() {
   const { toast } = useToast();
@@ -21,6 +23,8 @@ export default function SuperadminUsers() {
   });
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [companyFilter, setCompanyFilter] = useState("ALL");
+  const [resetTarget, setResetTarget] = useState<{ id: number; name: string } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
 
   const { data: allUsers, isLoading } = useQuery<any[]>({
     queryKey: ["/api/users"],
@@ -72,6 +76,18 @@ export default function SuperadminUsers() {
       toast({ title: `Now impersonating ${data.user.firstName} ${data.user.lastName}` });
       navigate("/");
       window.location.reload();
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ userId, password }: { userId: number; password: string }) => {
+      return apiRequest("POST", `/api/superadmin/users/${userId}/reset-password`, { password });
+    },
+    onSuccess: () => {
+      toast({ title: "Password reset successfully" });
+      setResetTarget(null);
+      setNewPassword("");
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -199,6 +215,15 @@ export default function SuperadminUsers() {
                                 >
                                   <Eye className="w-4 h-4 text-muted-foreground" />
                                 </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Reset password"
+                                  onClick={() => { setResetTarget({ id: u.id, name: `${u.firstName} ${u.lastName}` }); setNewPassword(""); }}
+                                  data-testid={`button-sa-reset-password-${u.id}`}
+                                >
+                                  <KeyRound className="w-4 h-4 text-muted-foreground" />
+                                </Button>
                               </>
                             )}
                           </div>
@@ -215,6 +240,38 @@ export default function SuperadminUsers() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={!!resetTarget} onOpenChange={(open) => { if (!open) { setResetTarget(null); setNewPassword(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Password — {resetTarget?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Label htmlFor="new-password">New Password</Label>
+            <Input
+              id="new-password"
+              type="password"
+              placeholder="Minimum 6 characters"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newPassword.length >= 6 && resetTarget) {
+                  resetPasswordMutation.mutate({ userId: resetTarget.id, password: newPassword });
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResetTarget(null); setNewPassword(""); }}>Cancel</Button>
+            <Button
+              onClick={() => resetTarget && resetPasswordMutation.mutate({ userId: resetTarget.id, password: newPassword })}
+              disabled={newPassword.length < 6 || resetPasswordMutation.isPending}
+            >
+              {resetPasswordMutation.isPending ? "Resetting..." : "Reset Password"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

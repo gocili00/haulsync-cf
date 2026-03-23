@@ -9,7 +9,7 @@ import type { Env } from "../db";
 import { createDb } from "../db";
 import { DatabaseStorage } from "../storage";
 import { authMiddleware, requireRole } from "../middleware/auth";
-import { generateAccessToken } from "../lib/auth";
+import { generateAccessToken, hashPassword } from "../lib/auth";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 
 export const superadminRoutes = new Hono<{ Bindings: Env }>();
@@ -20,8 +20,10 @@ function st(c: Context<{ Bindings: Env }>) { return new DatabaseStorage(createDb
 superadminRoutes.get("/users", authMiddleware, requireRole("SUPERADMIN"), async (c) => {
   const storage = st(c);
   const allUsers = await storage.getAllUsers();
-  const results = [];
-  for (const u of allUsers) { const co = u.companyId ? await storage.getCompany(u.companyId) : null; results.push({ ...u, passwordHash: undefined, companyName: co?.name ?? null }); }
+  const companyIds = [...new Set(allUsers.map(u => u.companyId).filter(Boolean) as number[])];
+  const companyList = await Promise.all(companyIds.map(id => storage.getCompany(id)));
+  const companyMap = new Map(companyList.filter(Boolean).map(co => [co!.id, co!.name]));
+  const results = allUsers.map(u => ({ ...u, passwordHash: undefined, companyName: u.companyId ? (companyMap.get(u.companyId) ?? null) : null }));
   return c.json(results);
 });
 
@@ -94,9 +96,11 @@ superadminRoutes.post("/superadmin/companies/:id/deactivate", authMiddleware, re
 superadminRoutes.get("/superadmin/companies/:id/users", authMiddleware, requireRole("SUPERADMIN"), async (c) => {
   const storage = st(c);
   const companyId = parseInt(c.req.param("id"));
-  const users = await storage.getAllUsers(companyId);
-  const results = [];
-  for (const u of users) { const profile = u.role === "DRIVER" ? await storage.getDriverProfile(u.id) : null; results.push({ ...u, passwordHash: undefined, profile }); }
+  const userList = await storage.getAllUsers(companyId);
+  const results = await Promise.all(userList.map(async (u) => {
+    const profile = u.role === "DRIVER" ? await storage.getDriverProfile(u.id) : null;
+    return { ...u, passwordHash: undefined, profile };
+  }));
   return c.json(results);
 });
 
@@ -107,13 +111,14 @@ superadminRoutes.get("/superadmin/companies/:id/drivers", authMiddleware, requir
 superadminRoutes.get("/superadmin/companies/:id/dispatchers", authMiddleware, requireRole("SUPERADMIN"), async (c) => {
   const storage = st(c);
   const companyId = parseInt(c.req.param("id"));
-  const dispatchers = await storage.getDispatchersByCompany(companyId);
-  const results = [];
-  for (const d of dispatchers) {
-    const profiles = await storage.getDriversWithProfiles(companyId);
-    const count = profiles.filter((p: any) => p.profile?.assignedDispatcherId === d.id).length;
-    results.push({ ...d, assignedDriverCount: count });
-  }
+  const [dispatchers, profiles] = await Promise.all([
+    storage.getDispatchersByCompany(companyId),
+    storage.getDriversWithProfiles(companyId),
+  ]);
+  const results = dispatchers.map((d: any) => ({
+    ...d,
+    assignedDriverCount: profiles.filter((p: any) => p.profile?.assignedDispatcherId === d.id).length,
+  }));
   return c.json(results);
 });
 
@@ -220,6 +225,25 @@ superadminRoutes.patch("/superadmin/users/:id/enable", authMiddleware, requireRo
     const updated = await storage.updateUser(targetId, { isActive: true } as any);
     await storage.createAuditLog({ actorId: user.userId, companyId: target.companyId ?? undefined, action: "USER_ENABLED", entity: "USER", entityId: targetId });
     return c.json({ ...updated, passwordHash: undefined });
+  } catch (err: any) { return c.json({ message: err.message }, 400); }
+});
+
+// POST /api/superadmin/users/:id/reset-password
+// Resets any user's password with the current cost factor (cost=4).
+// Required because existing cost=10 bcrypt hashes cannot be verified in CF Workers.
+superadminRoutes.post("/superadmin/users/:id/reset-password", authMiddleware, requireRole("SUPERADMIN"), async (c) => {
+  try {
+    const storage = st(c);
+    const targetId = parseInt(c.req.param("id"));
+    const { password } = await c.req.json();
+    if (!password || typeof password !== "string" || password.length < 6) {
+      return c.json({ message: "Password must be at least 6 characters" }, 400);
+    }
+    const target = await storage.getUser(targetId);
+    if (!target) return c.json({ message: "User not found" }, 404);
+    const passwordHash = await hashPassword(password);
+    await storage.updateUser(targetId, { passwordHash } as any);
+    return c.json({ message: "Password reset successfully" });
   } catch (err: any) { return c.json({ message: err.message }, 400); }
 });
 

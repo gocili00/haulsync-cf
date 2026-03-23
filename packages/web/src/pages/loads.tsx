@@ -599,47 +599,46 @@ function GroupedLoadsView({
                     <span className="font-medium text-foreground">{rpm}</span>
                   )}
                 </div>
+                {/* Badges — mobile only (below name/email) */}
+                <div className="flex sm:hidden items-center gap-2 flex-wrap mt-1.5">
+                  <Badge variant="secondary" className="text-[10px]" data-testid={`badge-load-count-${group.driver.id}`}>
+                    <Truck className="w-3 h-3 mr-1" />{group.loads.length} loads
+                  </Badge>
+                  {group.totalMiles > 0 && (
+                    <Badge variant="secondary" className="text-[10px]" data-testid={`badge-miles-${group.driver.id}`}>
+                      <MapPin className="w-3 h-3 mr-1" />{group.totalMiles.toLocaleString()} mi
+                    </Badge>
+                  )}
+                  {group.totalRevenue > 0 && (
+                    <Badge variant="secondary" className="text-[10px]" data-testid={`badge-revenue-${group.driver.id}`}>
+                      <DollarSign className="w-3 h-3 mr-1" />${group.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Badge>
+                  )}
+                  {group.pendingCount > 0 && (
+                    <Badge variant="default" className="text-[10px]" data-testid={`badge-pending-${group.driver.id}`}>
+                      <Clock className="w-3 h-3 mr-1" />{group.pendingCount} pending
+                    </Badge>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge
-                  variant="secondary"
-                  className="text-[10px]"
-                  data-testid={`badge-load-count-${group.driver.id}`}
-                >
-                  <Truck className="w-3 h-3 mr-1" />
-                  {group.loads.length} loads
+              {/* Badges — desktop only (right side of card) */}
+              <div className="hidden sm:flex items-center gap-2 flex-wrap flex-shrink-0">
+                <Badge variant="secondary" className="text-[10px]" data-testid={`badge-load-count-${group.driver.id}`}>
+                  <Truck className="w-3 h-3 mr-1" />{group.loads.length} loads
                 </Badge>
                 {group.totalMiles > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="text-[10px]"
-                    data-testid={`badge-miles-${group.driver.id}`}
-                  >
-                    <MapPin className="w-3 h-3 mr-1" />
-                    {group.totalMiles.toLocaleString()} mi
+                  <Badge variant="secondary" className="text-[10px]" data-testid={`badge-miles-${group.driver.id}`}>
+                    <MapPin className="w-3 h-3 mr-1" />{group.totalMiles.toLocaleString()} mi
                   </Badge>
                 )}
                 {group.totalRevenue > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="text-[10px]"
-                    data-testid={`badge-revenue-${group.driver.id}`}
-                  >
-                    <DollarSign className="w-3 h-3 mr-1" />$
-                    {group.totalRevenue.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                  <Badge variant="secondary" className="text-[10px]" data-testid={`badge-revenue-${group.driver.id}`}>
+                    <DollarSign className="w-3 h-3 mr-1" />${group.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </Badge>
                 )}
                 {group.pendingCount > 0 && (
-                  <Badge
-                    variant="default"
-                    className="text-[10px]"
-                    data-testid={`badge-pending-${group.driver.id}`}
-                  >
-                    <Clock className="w-3 h-3 mr-1" />
-                    {group.pendingCount} pending
+                  <Badge variant="default" className="text-[10px]" data-testid={`badge-pending-${group.driver.id}`}>
+                    <Clock className="w-3 h-3 mr-1" />{group.pendingCount} pending
                   </Badge>
                 )}
               </div>

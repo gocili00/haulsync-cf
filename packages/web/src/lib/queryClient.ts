@@ -8,6 +8,18 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// Auth callbacks — registered by AuthProvider so queryClient can sync user state
+let _onRefreshSuccess: ((user: any) => void) | null = null;
+let _onAuthExpired: (() => void) | null = null;
+
+export function setAuthCallbacks(callbacks: {
+  onRefreshSuccess: (user: any) => void;
+  onAuthExpired: () => void;
+}) {
+  _onRefreshSuccess = callbacks.onRefreshSuccess;
+  _onAuthExpired = callbacks.onAuthExpired;
+}
+
 let isRefreshing = false;
 let refreshPromise: Promise<boolean> | null = null;
 
@@ -22,7 +34,13 @@ async function attemptRefresh(): Promise<boolean> {
         method: "POST",
         credentials: "include",
       });
-      return res.ok;
+      if (res.ok) {
+        const data = await res.json();
+        // Sync the refreshed user back into AuthContext so companyId/role stay valid
+        if (data?.user) _onRefreshSuccess?.(data.user);
+        return true;
+      }
+      return false;
     } catch {
       return false;
     } finally {
@@ -66,7 +84,10 @@ export async function apiRequest(
 
   if (res.status === 401 && !url.includes("/api/auth/")) {
     const refreshed = await attemptRefresh();
-    if (refreshed) {
+    if (!refreshed) {
+      // Refresh token is invalid/expired — session is truly over
+      _onAuthExpired?.();
+    } else {
       res = await fetch(url, {
         method,
         headers: data ? { "Content-Type": "application/json" } : {},
@@ -94,7 +115,10 @@ export const getQueryFn: <T>(options: {
 
     if (res.status === 401) {
       const refreshed = await attemptRefresh();
-      if (refreshed) {
+      if (!refreshed) {
+        // Refresh token is invalid/expired — session is truly over
+        _onAuthExpired?.();
+      } else {
         res = await fetch(finalUrl, {
           credentials: "include",
         });

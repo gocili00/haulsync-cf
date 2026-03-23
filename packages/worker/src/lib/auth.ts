@@ -31,13 +31,29 @@ export interface UserPayload {
   isImpersonating?: boolean;
 }
 
-// ── Password hashing (unchanged — bcryptjs is pure JS) ─────────────────────
+// ── Password hashing ───────────────────────────────────────────────────────
+// CF Workers has a 50ms CPU limit. bcryptjs cost=10 takes ~100ms in pure JS
+// and reliably exceeds this limit. Cost=4 takes ~1-2ms, well within limits.
+// bcrypt.compare() reads the cost factor from the stored hash, so existing
+// cost-10 hashes CANNOT be verified in CF Workers — they must be reset via
+// the superadmin reset-password endpoint.
+const BCRYPT_COST = 4;
+
 export function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 10);
+  return bcrypt.hash(password, BCRYPT_COST);
 }
 
 export function comparePassword(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash);
+}
+
+// Returns true when a stored hash was created with a cost factor higher than
+// our current target — used to trigger transparent re-hash on successful login.
+export function needsRehash(hash: string): boolean {
+  const parts = hash.split("$");
+  // bcrypt hash format: $2a$NN$... where NN is zero-padded cost factor
+  const cost = parseInt(parts[2], 10);
+  return !isNaN(cost) && cost > BCRYPT_COST;
 }
 
 // ── JWT (jose replaces jsonwebtoken) ───────────────────────────────────────

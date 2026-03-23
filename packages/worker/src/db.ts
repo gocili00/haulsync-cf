@@ -1,6 +1,6 @@
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-import * as schema from "@haulsync/shared";
+// db.ts
+import { drizzle } from "drizzle-orm/neon-http";
+import { neon } from "@neondatabase/serverless";
 
 export type Env = {
   DATABASE_URL: string;
@@ -12,10 +12,8 @@ export type Env = {
 };
 
 export function createDb(env: Pick<Env, "DATABASE_URL">) {
-  const client = postgres(env.DATABASE_URL, {
-    prepare: false, // required for Supabase transaction pooler / Cloudflare Workers
-  });
-  return drizzle(client, { schema });
+  const sql = neon(env.DATABASE_URL);
+  return drizzle(sql);
 }
 
 export type Db = ReturnType<typeof createDb>;

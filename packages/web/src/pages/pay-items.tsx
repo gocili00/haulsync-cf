@@ -327,23 +327,32 @@ function GroupedPayItemsView({
                 {group.driver.email && (
                   <p className="text-xs text-muted-foreground mt-0.5">{group.driver.email}</p>
                 )}
+                {/* Badges — mobile only */}
+                <div className="flex sm:hidden items-center gap-2 flex-wrap mt-1.5">
+                  <Badge variant="secondary" className="text-[10px]" data-testid={`badge-pay-count-${group.driver.id}`}>
+                    <DollarSign className="w-3 h-3 mr-1" />{group.items.length} items
+                  </Badge>
+                  <Badge variant="secondary" className={`text-[10px] ${group.totalAmount >= 0 ? "text-chart-2" : "text-destructive"}`} data-testid={`badge-pay-total-${group.driver.id}`}>
+                    {group.totalAmount >= 0 ? "+" : ""}${Math.abs(group.totalAmount).toFixed(2)}
+                  </Badge>
+                  {group.pendingCount > 0 && (
+                    <Badge variant="default" className="text-[10px]" data-testid={`badge-pay-pending-${group.driver.id}`}>
+                      <Clock className="w-3 h-3 mr-1" />{group.pendingCount} pending
+                    </Badge>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
+              {/* Badges — desktop only (right side) */}
+              <div className="hidden sm:flex items-center gap-2 flex-wrap flex-shrink-0">
                 <Badge variant="secondary" className="text-[10px]" data-testid={`badge-pay-count-${group.driver.id}`}>
-                  <DollarSign className="w-3 h-3 mr-1" />
-                  {group.items.length} items
+                  <DollarSign className="w-3 h-3 mr-1" />{group.items.length} items
                 </Badge>
-                <Badge
-                  variant="secondary"
-                  className={`text-[10px] ${group.totalAmount >= 0 ? "text-chart-2" : "text-destructive"}`}
-                  data-testid={`badge-pay-total-${group.driver.id}`}
-                >
+                <Badge variant="secondary" className={`text-[10px] ${group.totalAmount >= 0 ? "text-chart-2" : "text-destructive"}`} data-testid={`badge-pay-total-${group.driver.id}`}>
                   {group.totalAmount >= 0 ? "+" : ""}${Math.abs(group.totalAmount).toFixed(2)}
                 </Badge>
                 {group.pendingCount > 0 && (
                   <Badge variant="default" className="text-[10px]" data-testid={`badge-pay-pending-${group.driver.id}`}>
-                    <Clock className="w-3 h-3 mr-1" />
-                    {group.pendingCount} pending
+                    <Clock className="w-3 h-3 mr-1" />{group.pendingCount} pending
                   </Badge>
                 )}
               </div>

@@ -24,6 +24,7 @@ export default function UploadLoadPage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus>(null);
   const [jobResult, setJobResult] = useState<any>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollJob = useCallback(async (id: string) => {
@@ -93,6 +94,7 @@ export default function UploadLoadPage() {
     const totalFiles = [...files, ...selected].slice(0, 2);
     setFiles(totalFiles);
     setSuccess(false);
+    setFileError(null);
 
     const newPreviews: (string | null)[] = [];
     totalFiles.forEach((f) => {
@@ -124,6 +126,7 @@ export default function UploadLoadPage() {
     setPickupCity("");
     setDeliveryCity("");
     setSuccess(false);
+    setFileError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -263,7 +266,7 @@ export default function UploadLoadPage() {
             <div className="space-y-3">
               <Button
                 variant="outline"
-                className={`w-full ${files.length === 0 ? "h-32" : "h-14"} border-dashed flex flex-col gap-2`}
+                className={`w-full ${files.length === 0 ? "h-32" : "h-14"} border-dashed flex flex-col gap-2 ${fileError ? "border-destructive" : ""}`}
                 onClick={() => fileInputRef.current?.click()}
                 data-testid="button-select-file"
               >
@@ -273,6 +276,12 @@ export default function UploadLoadPage() {
                   {files.length === 0 ? "PDF, JPG, or PNG (max 10MB each, up to 2 files)" : "Optional: for CONSIGNEE section"}
                 </span>
               </Button>
+              {fileError && (
+                <p className="text-xs text-destructive flex items-center gap-1" data-testid="text-file-error">
+                  <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                  {fileError}
+                </p>
+              )}
               {files.length === 0 && (
                 <Button
                   variant="outline"
@@ -316,8 +325,14 @@ export default function UploadLoadPage() {
 
           <Button
             className="w-full h-12"
-            onClick={() => uploadMutation.mutate()}
-            disabled={files.length === 0 || uploadMutation.isPending}
+            onClick={() => {
+              if (files.length === 0) {
+                setFileError("BOL file is required");
+                return;
+              }
+              uploadMutation.mutate();
+            }}
+            disabled={uploadMutation.isPending}
             data-testid="button-upload-bol"
           >
             {uploadMutation.isPending ? (

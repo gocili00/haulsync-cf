@@ -14,12 +14,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, DollarSign, ArrowUpRight, ArrowDownRight, RotateCcw, Check, User, ChevronRight, ChevronDown, Search, MapPin, Clock } from "lucide-react";
+import { Plus, DollarSign, ArrowUpRight, ArrowDownRight, RotateCcw, Check, User, ChevronRight, ChevronDown, Search, MapPin, Clock, Receipt, ImageIcon, X } from "lucide-react";
+
+const EXPENSE_CATEGORIES = [
+  { value: "LUMPER", label: "Lumper" },
+  { value: "TOLL", label: "Toll" },
+  { value: "SCALE_TICKET", label: "Scale Ticket" },
+  { value: "PARKING", label: "Parking" },
+  { value: "FUEL", label: "Fuel" },
+  { value: "OTHER", label: "Other" },
+];
 
 const CATEGORIES = [
   "EXTRA_STOP", "LAYOVER", "DETENTION", "BREAKDOWN",
   "INSPECTION_L1", "INSPECTION_L2", "INSPECTION_L3",
-  "SAFETY_BONUS", "ESCROW", "ADVANCE", "FUEL", "INSURANCE", "OTHER"
+  "SAFETY_BONUS", "ESCROW", "ADVANCE", "FUEL", "INSURANCE",
+  "LUMPER", "TOLL", "SCALE_TICKET", "PARKING", "OTHER"
 ];
 
 export default function PayItemsPage() {
@@ -177,22 +187,39 @@ export default function PayItemsPage() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-item">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Pay Item
-            </Button>
+            {isDriver ? (
+              <Button data-testid="button-add-pay-item">
+                <Receipt className="w-4 h-4 mr-2" />
+                Add Expense
+              </Button>
+            ) : (
+              <Button data-testid="button-add-pay-item">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Pay Item
+              </Button>
+            )}
           </DialogTrigger>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Add Pay Item</DialogTitle>
+              <DialogTitle>{isDriver ? "Add Expense" : "Add Pay Item"}</DialogTitle>
             </DialogHeader>
-            <PayItemForm
-              onSuccess={() => {
-                setDialogOpen(false);
-                queryClient.invalidateQueries({ queryKey: tenantQueryKey(user, "/api/pay-items") });
-                toast({ title: "Pay item created" });
-              }}
-            />
+            {isDriver ? (
+              <DriverExpenseForm
+                onSuccess={() => {
+                  setDialogOpen(false);
+                  queryClient.invalidateQueries({ queryKey: tenantQueryKey(user, "/api/pay-items") });
+                  toast({ title: "Expense submitted for approval" });
+                }}
+              />
+            ) : (
+              <PayItemForm
+                onSuccess={() => {
+                  setDialogOpen(false);
+                  queryClient.invalidateQueries({ queryKey: tenantQueryKey(user, "/api/pay-items") });
+                  toast({ title: "Pay item created" });
+                }}
+              />
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -483,6 +510,137 @@ function PayItemRow({ item, typeIcons, canApprove, approveMutation, showDriver }
         </TableCell>
       )}
     </TableRow>
+  );
+}
+
+function DriverExpenseForm({ onSuccess }: { onSuccess: () => void }) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({ category: "LUMPER", amount: "", description: "" });
+  const [amountError, setAmountError] = useState<string | null>(null);
+  const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const validateAmount = (value: string): string | null => {
+    const n = parseFloat(value);
+    if (!value || isNaN(n)) return "Amount is required";
+    if (n <= 0) return "Amount must be greater than $0.00";
+    return null;
+  };
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setReceiptPreview(URL.createObjectURL(file));
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/pay-items/receipt-upload", { method: "POST", body: fd, credentials: "include" });
+      const data = await res.json() as any;
+      if (!res.ok) throw new Error(data?.message ?? "Upload failed");
+      setReceiptUrl(data.receiptUrl);
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+      setReceiptPreview(null);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/pay-items/expense", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ category: form.category, amount: form.amount, description: form.description || null, receiptUrl }),
+      });
+      const data = await res.json() as any;
+      if (!res.ok) throw new Error(data?.message ?? "Failed");
+      return data;
+    },
+    onSuccess: () => onSuccess(),
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const canSubmit = !validateAmount(form.amount) && !uploading;
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1.5">
+        <Label>Expense Type</Label>
+        <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {EXPENSE_CATEGORIES.map((c) => (
+              <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Amount</Label>
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+          <Input
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+            className={`pl-7 ${amountError ? "border-destructive" : ""}`}
+            value={form.amount}
+            onChange={(e) => {
+              setForm({ ...form, amount: e.target.value });
+              if (amountError) setAmountError(validateAmount(e.target.value));
+            }}
+            onBlur={(e) => setAmountError(validateAmount(e.target.value))}
+          />
+        </div>
+        {amountError && (
+          <p className="text-xs text-destructive" data-testid="text-amount-error">{amountError}</p>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        <Label>Note <span className="text-muted-foreground text-xs">(optional)</span></Label>
+        <Input placeholder="e.g. Lumper at Chicago terminal" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Receipt Photo <span className="text-muted-foreground text-xs">(optional)</span></Label>
+        {receiptPreview ? (
+          <div className="relative w-full h-36 rounded-md overflow-hidden border border-border">
+            <img src={receiptPreview} alt="Receipt" className="w-full h-full object-cover" />
+            {uploading && (
+              <div className="absolute inset-0 bg-background/70 flex items-center justify-center">
+                <span className="text-xs text-muted-foreground">Uploading…</span>
+              </div>
+            )}
+            <button className="absolute top-1 right-1 bg-background/80 rounded-full p-0.5" onClick={() => { setReceiptPreview(null); setReceiptUrl(null); }}>
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="w-full h-24 border border-dashed border-border rounded-md flex flex-col items-center justify-center gap-1.5 text-muted-foreground hover:bg-muted/20 transition-colors">
+            <ImageIcon className="w-5 h-5" />
+            <span className="text-xs">Tap to add receipt photo</span>
+          </button>
+        )}
+        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+      </div>
+      <Button
+        className="w-full"
+        disabled={mutation.isPending}
+        onClick={() => {
+          const err = validateAmount(form.amount);
+          if (err) { setAmountError(err); return; }
+          mutation.mutate();
+        }}
+      >
+        {mutation.isPending ? "Submitting…" : "Submit Expense"}
+      </Button>
+    </div>
   );
 }
 

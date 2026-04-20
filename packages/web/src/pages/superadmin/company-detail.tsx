@@ -70,7 +70,7 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
     enabled: activeTab === "Loads",
   });
 
-  const { data: payrollWeeks } = useQuery<any[]>({
+  const { data: payrollWeeks, isLoading: payrollLoading, isError: payrollError } = useQuery<any[]>({
     queryKey: ["/api/superadmin/companies", companyId, "payroll"],
     enabled: activeTab === "Payroll",
   });
@@ -269,10 +269,10 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                       const RoleIcon = roleIcons[u.role] || Shield;
                       return (
                         <TableRow key={u.id} data-testid={`row-sa-user-${u.id}`}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium text-sm">{u.firstName} {u.lastName}</p>
-                              <p className="text-xs text-muted-foreground">{u.email}</p>
+                          <TableCell className="max-w-[160px]">
+                            <div className="min-w-0">
+                              <p className="font-medium text-sm truncate">{[u.firstName, u.lastName].filter(Boolean).join(" ") || "—"}</p>
+                              <p className="text-xs text-muted-foreground truncate">{u.email}</p>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -345,9 +345,11 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                 <TableBody>
                   {(drivers ?? []).map((d: any) => (
                     <TableRow key={d.id} data-testid={`row-sa-driver-${d.id}`}>
-                      <TableCell>
-                        <p className="font-medium text-sm">{d.firstName} {d.lastName}</p>
-                        <p className="text-xs text-muted-foreground">{d.email}</p>
+                      <TableCell className="max-w-[160px]">
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{[d.firstName, d.lastName].filter(Boolean).join(" ") || "—"}</p>
+                          <p className="text-xs text-muted-foreground truncate">{d.email}</p>
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm tabular-nums">${d.profile?.ratePerMile || "0.00"}</TableCell>
                       <TableCell>
@@ -394,7 +396,7 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                 <TableBody>
                   {(dispatchers ?? []).map((d: any) => (
                     <TableRow key={d.id} data-testid={`row-sa-dispatcher-${d.id}`}>
-                      <TableCell className="font-medium text-sm">{d.firstName} {d.lastName}</TableCell>
+                      <TableCell className="font-medium text-sm max-w-[160px] truncate">{[d.firstName, d.lastName].filter(Boolean).join(" ") || "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{d.email}</TableCell>
                       <TableCell><Badge variant={d.isActive ? "default" : "secondary"}>{d.isActive ? "Active" : "Inactive"}</Badge></TableCell>
                       <TableCell className="text-right"><Badge variant="secondary">{d.assignedDriverCount ?? 0}</Badge></TableCell>
@@ -433,9 +435,9 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                     {(companyLoads ?? []).map((l: any) => (
                       <TableRow key={l.id} className={l.isDeleted || l.isVoided ? "opacity-50" : ""} data-testid={`row-sa-load-${l.id}`}>
                         <TableCell className="text-muted-foreground text-xs tabular-nums">{l.id}</TableCell>
-                        <TableCell className="text-sm">{l.driverName || "\u2014"}</TableCell>
-                        <TableCell className="text-sm max-w-40 truncate">{l.verifiedPickupAddress || l.pickupAddress || "\u2014"}</TableCell>
-                        <TableCell className="text-sm max-w-40 truncate">{l.verifiedDeliveryAddress || l.deliveryAddress || "\u2014"}</TableCell>
+                        <TableCell className="text-sm max-w-[140px] truncate">{l.driverName || "\u2014"}</TableCell>
+                        <TableCell className="text-sm max-w-40 truncate">{l.verifiedPickupAddress || l.extractedPickupAddress || l.pickupAddress || "\u2014"}</TableCell>
+                        <TableCell className="text-sm max-w-40 truncate">{l.verifiedDeliveryAddress || l.extractedDeliveryAddress || l.deliveryAddress || "\u2014"}</TableCell>
                         <TableCell className="text-sm tabular-nums">{l.finalMiles || l.calculatedMiles || "\u2014"}</TableCell>
                         <TableCell>
                           <Badge variant={l.isVoided ? "destructive" : l.isDeleted ? "secondary" : "outline"} className="text-[10px]">
@@ -474,6 +476,15 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
       {activeTab === "Payroll" && (
         <Card>
           <CardContent className="p-0">
+            {payrollLoading ? (
+              <div className="space-y-2 p-4">
+                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}
+              </div>
+            ) : payrollError ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">Failed to load payroll data</div>
+            ) : (payrollWeeks ?? []).length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">No payroll weeks for this company yet</div>
+            ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -491,7 +502,7 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                   {(payrollWeeks ?? []).map((pw: any) => (
                     <TableRow key={pw.id} data-testid={`row-sa-payroll-${pw.id}`}>
                       <TableCell className="text-muted-foreground text-xs tabular-nums">{pw.id}</TableCell>
-                      <TableCell className="text-sm">{pw.driverName || "\u2014"}</TableCell>
+                      <TableCell className="text-sm max-w-[140px] truncate">{pw.driverName || "\u2014"}</TableCell>
                       <TableCell className="text-sm">{pw.weekStart} - {pw.weekEnd}</TableCell>
                       <TableCell><Badge variant="outline" className="text-[10px]">{pw.status}</Badge></TableCell>
                       <TableCell className="text-right text-sm tabular-nums">${Number(pw.netPayTotal || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</TableCell>
@@ -513,6 +524,7 @@ export default function CompanyDetail({ companyId }: { companyId: number }) {
                 </TableBody>
               </Table>
             </div>
+            )}
           </CardContent>
         </Card>
       )}

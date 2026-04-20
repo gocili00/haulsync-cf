@@ -252,7 +252,7 @@ export default function LoadsPage() {
     });
   };
 
-  const canCreate = true;
+  const canCreate = !isDriver;
 
   const statusStyles: Record<string, string> = {
     DRAFT: "secondary",
@@ -863,12 +863,12 @@ function LoadTableRow({
         <div className="flex items-center gap-2 min-w-0">
           <div className="min-w-0">
             <p className="text-sm font-medium truncate max-w-[180px]">
-              {load.pickupAddress || "—"}
+              {load.verifiedPickupAddress || load.extractedPickupAddress || load.pickupAddress || "—"}
             </p>
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <ArrowRight className="w-3 h-3 flex-shrink-0" />
               <span className="truncate max-w-[180px]">
-                {load.deliveryAddress || "—"}
+                {load.verifiedDeliveryAddress || load.extractedDeliveryAddress || load.deliveryAddress || "—"}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-0.5">
@@ -899,7 +899,7 @@ function LoadTableRow({
       </TableCell>
       {showDriverCol && (
         <TableCell
-          className="text-sm"
+          className="text-sm max-w-[140px] truncate"
           data-testid={`text-load-driver-${load.id}`}
         >
           {load.driverName || "—"}
@@ -1127,6 +1127,7 @@ function LoadActions({
     userRole === "ADMIN" ||
     userRole === "SUPERADMIN";
   const isAdminRole = userRole === "ADMIN" || userRole === "SUPERADMIN";
+  const isDriverRole = userRole === "DRIVER";
 
   if (load.isDeleted || load.isVoided) {
     return (
@@ -1151,11 +1152,6 @@ function LoadActions({
     );
   }
 
-  const canSubmit =
-    (load.status === "DRAFT" ||
-      load.status === "BOL_UPLOADED" ||
-      load.status === "OCR_DONE") &&
-    (userRole === "DRIVER" || isManagerRole);
   const canVerify =
     (load.status === "SUBMITTED" ||
       load.status === "BOL_UPLOADED" ||
@@ -1163,11 +1159,12 @@ function LoadActions({
     isManagerRole;
   const canApprove = load.status === "VERIFIED" && isManagerRole;
   const canEdit2 =
-    load.status === "DRAFT" ||
-    load.status === "BOL_UPLOADED" ||
-    load.status === "OCR_DONE" ||
-    (load.status === "VERIFIED" && isManagerRole) ||
-    isAdminRole;
+    !isDriverRole &&
+    (load.status === "DRAFT" ||
+      load.status === "BOL_UPLOADED" ||
+      load.status === "OCR_DONE" ||
+      (load.status === "VERIFIED" && isManagerRole) ||
+      isAdminRole);
 
   const deletableStatuses = [
     "DRAFT",
@@ -1190,17 +1187,6 @@ function LoadActions({
           data-testid={`button-edit-load-${load.id}`}
         >
           Edit
-        </Button>
-      )}
-      {canSubmit && userRole === "DRIVER" && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => statusMutation.mutate("SUBMITTED")}
-          disabled={statusMutation.isPending}
-          data-testid={`button-submit-load-${load.id}`}
-        >
-          Submit
         </Button>
       )}
       {canVerify && (
@@ -2084,8 +2070,14 @@ function LoadForm({ load, onSuccess }: { load?: any; onSuccess: () => void }) {
     },
   });
 
+  const dateError =
+    form.pickupDate && form.deliveryDate && form.deliveryDate < form.pickupDate
+      ? "Delivery date cannot be before pickup date."
+      : null;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (dateError) return;
     mutation.mutate({
       ...form,
       driverUserId: parseInt(form.driverUserId),
@@ -2210,8 +2202,13 @@ function LoadForm({ load, onSuccess }: { load?: any; onSuccess: () => void }) {
             data-testid="input-delivery-date"
             type="date"
             value={form.deliveryDate}
+            min={form.pickupDate || undefined}
             onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
+            className={dateError ? "border-destructive" : ""}
           />
+          {dateError && (
+            <p className="text-xs text-destructive">{dateError}</p>
+          )}
         </div>
       </div>
       <div className="grid grid-cols-3 gap-3">

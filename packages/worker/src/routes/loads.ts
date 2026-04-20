@@ -124,7 +124,15 @@ loadRoutes.post("/loads", authMiddleware, async (c) => {
     const user = c.get("user");
     const storage = st(c);
     const body = await c.req.json();
-    const { driverUserId, pickupAddress, deliveryAddress, pickupDate, deliveryDate, calculatedMiles, adjustedMiles, finalMiles, brokerName, truckId } = body;
+    const { driverUserId, pickupDate, deliveryDate, calculatedMiles, adjustedMiles, finalMiles, brokerName, truckId } = body;
+    const pickupAddress = typeof body.pickupAddress === "string" ? body.pickupAddress.trim() : null;
+    const deliveryAddress = typeof body.deliveryAddress === "string" ? body.deliveryAddress.trim() : null;
+    if (pickupAddress !== null && pickupAddress.length === 0)
+      return c.json({ message: "Pickup address cannot be empty." }, 400);
+    if (deliveryAddress !== null && deliveryAddress.length === 0)
+      return c.json({ message: "Delivery address cannot be empty." }, 400);
+    if (pickupDate && deliveryDate && deliveryDate < pickupDate)
+      return c.json({ message: "Delivery date cannot be before pickup date." }, 400);
     const actualDriverId = user.role === "DRIVER" ? user.userId : driverUserId;
     if (user.role !== "DRIVER" && user.role !== "SUPERADMIN") {
       const valid = await validateDriver(storage, actualDriverId, user.companyId, user.role);
@@ -489,6 +497,10 @@ loadRoutes.patch("/loads/:id", authMiddleware, async (c) => {
     }
     const newPickup = pickupAddress ?? existing.pickupAddress;
     const newDelivery = deliveryAddress ?? existing.deliveryAddress;
+    const effectivePickupDate = pickupDate ?? existing.pickupDate;
+    const effectiveDeliveryDate = deliveryDate ?? existing.deliveryDate;
+    if (effectivePickupDate && effectiveDeliveryDate && effectiveDeliveryDate < effectivePickupDate)
+      return c.json({ message: "Delivery date cannot be before pickup date." }, 400);
     const updatePayload: any = { pickupAddress: newPickup, deliveryAddress: newDelivery, pickupDate: pickupDate ?? existing.pickupDate, deliveryDate: deliveryDate ?? existing.deliveryDate, calculatedMiles: calculatedMiles ?? existing.calculatedMiles, adjustedMiles: adjustedMiles ?? existing.adjustedMiles, finalMiles: finalMiles || adjustedMiles || calculatedMiles || existing.finalMiles, driverUserId: driverUserId || existing.driverUserId };
     if (user.role !== "DRIVER" && brokerName !== undefined) updatePayload.brokerName = brokerName || null;
     if (user.role !== "DRIVER" && truckId !== undefined) updatePayload.truckId = truckId ? parseInt(truckId) : null;

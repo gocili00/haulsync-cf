@@ -52,7 +52,7 @@ export default function PayrollPage() {
   };
   if (debouncedSearch) queryParams.search = debouncedSearch;
 
-  const { data, isLoading } = useQuery<PaginatedPayroll>({
+  const { data, isLoading, isError } = useQuery<PaginatedPayroll>({
     queryKey: tenantQueryKey(user, "/api/payroll", queryParams),
     enabled: !!user?.id && (!!user?.companyId || user?.role === "SUPERADMIN"),
   });
@@ -125,15 +125,27 @@ export default function PayrollPage() {
         <div className="space-y-4">
           {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
         </div>
+      ) : isError ? (
+        <Card>
+          <CardContent className="p-12 text-center">
+            <Wallet className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+            <p className="text-muted-foreground font-medium">Failed to load payroll data</p>
+            <p className="text-sm text-muted-foreground mt-1">Check your connection and try refreshing the page</p>
+          </CardContent>
+        </Card>
       ) : payrollWeeks.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center">
             <Wallet className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
             <p className="text-muted-foreground font-medium">
-              {debouncedSearch ? "No payroll weeks match your search" : "No payroll weeks yet"}
+              {debouncedSearch ? "No payroll weeks match your search" : "No payroll data for this period"}
             </p>
             <p className="text-sm text-muted-foreground mt-1">
-              {debouncedSearch ? "Try a different search term" : "Generate a payroll week to get started"}
+              {debouncedSearch
+                ? "Try a different search term"
+                : canManagePayroll
+                  ? "Generate a payroll week to get started"
+                  : "Your dispatcher hasn't generated a payroll week yet"}
             </p>
           </CardContent>
         </Card>
